@@ -83,6 +83,32 @@ def archive(parser, xml_parent, data):
         fingerprint.text = str(data.get('fingerprint', False)).lower()
 
 
+def allure(parser, xml_parent, data):
+    """yaml: allure
+    Use allure plugins
+    Requires the Jenkins `Allure Plugin.
+    <https://wiki.jenkins-ci.org/display/JENKINS/Allure+Plugin>`_
+    """
+    allure = XML.SubElement(xml_parent, 'ru.yandex.qatools.allure.jenkins.AllureReportPublisher')
+    allure.set("plugin", "allure-jenkins-plugin@2.5")
+    config = XML.SubElement(allure, 'config')
+    resultsPattern = XML.SubElement(config, 'resultsPattern')
+    resultsPattern.text = "**/allure-results"
+    reportVersionCustom = XML.SubElement(config, 'reportVersionCustom')
+    reportBuildPolicy = XML.SubElement(config, 'reportBuildPolicy')
+    reportBuildPolicy.text = "ALWAYS"
+    reportVersionPolicy = XML.SubElement(config, 'reportVersionPolicy')
+    reportVersionPolicy.text = "CUSTOM"
+    reportVersionCustom = XML.SubElement(config, 'reportVersionCustom')
+    reportVersionCustom.text = "1.4.3"
+    includeProperties = XML.SubElement(config, 'includeProperties')
+    includeProperties.text = "false"
+    REPORT__DIR__PREFIX = XML.SubElement(allure, 'REPORT__DIR__PREFIX')
+    REPORT__DIR__PREFIX.text = "allure"
+    alwaysGenerate = XML.SubElement(allure, 'alwaysGenerate')
+    alwaysGenerate.text = "false"
+
+
 def blame_upstream(parser, xml_parent, data):
     """yaml: blame-upstream
     Notify upstream commiters when build fails
