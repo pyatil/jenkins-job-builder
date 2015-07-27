@@ -214,6 +214,40 @@ the generic macro ``add``.  Whenever you forget a parameter from a macro,
 it will not be expanded and left as is, which will most probably cause havoc in
 your Jenkins builds.
 
+.. _raw:
+
+Raw config
+^^^^^^^^^^
+
+It is possible, but not recommended, to use `raw` within a module to
+inject raw xml into the job configs.
+
+This is relevant in case there is no appropriate module for a
+Jenkins plugin or the module does not behave as you expect it to do.
+
+For example:
+
+.. literalinclude:: /../../tests/wrappers/fixtures/raw001.yaml
+
+Is the raw way of adding support for the `xvnc` wrapper.
+
+To get the appropriate xml to use you would need to create/edit a job
+in Jenkins and grab the relevant raw xml segment from the
+`config.xml`.
+
+The xml string can refer to variables just like anything else and as
+such can be parameterized like anything else.
+
+You can use `raw` in most locations, the following example show them
+with arbitrary xml-data:
+
+.. literalinclude::
+   /../../tests/yamlparser/fixtures/complete-raw001.yaml
+
+Note: If you have a need to use `raw` please consider submitting a patch to
+add or fix the module that will remove your need to use `raw`.
+
+
 .. _defaults:
 
 Defaults
@@ -261,6 +295,18 @@ For example:
 .. literalinclude:: /../../tests/yamlparser/fixtures/second_order_parameter_interpolation002.yaml
 
 
+By default JJB will fail if it tries to interpolate a variable that was not
+defined, but you can change that behavior and allow empty variables with the
+allow_empty_variables configuration option.
+
+For example, having a configuration file with that option enabled:
+
+.. literalinclude:: /../../tests/yamlparser/fixtures/allow_empty_variables.conf
+
+Will prevent JJb from failing if there are any non-initialized variables used
+and replace them with the empty string instead.
+
+
 Yaml Anchors & Aliases
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -273,9 +319,8 @@ For example:
 
 
 The `anchors and aliases`_ are expanded internally within JJB's yaml loading
-calls, and are limited to individual documents. That means you use the same
-anchor name in separate files without collisions, but also means that you must
-define the anchor in the same file that you intend to reference it.
+calls and are not limited to individual documents. That means you can't use
+the same anchor name in included files without collisions.
 
 A simple example can be seen in the specs `full length example`_ with the
 following being more representative of usage within JJB:

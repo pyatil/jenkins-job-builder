@@ -32,9 +32,10 @@ Example::
 
 import six
 import xml.etree.ElementTree as XML
-from jenkins_jobs.errors import JenkinsJobsException
 import jenkins_jobs.modules.base
 from jenkins_jobs.modules import hudson_model
+from jenkins_jobs.errors import (InvalidAttributeError,
+                                 JenkinsJobsException)
 import logging
 import re
 try:
@@ -213,14 +214,14 @@ def gerrit(parser, xml_parent, data):
       :Trigger on:
 
          * **patchset-created-event** (`dict`) -- Trigger upon patchset
-                                                  creation.
+           creation.
 
            :Patchset created:
                * **exclude-drafts** (`bool`) -- exclude drafts (Default: False)
                * **exclude-trivial-rebase** (`bool`) -- exclude trivial rebase
-                                                        (Default: False)
+                 (Default: False)
                * **exclude-no-code-change** (`bool`) -- exclude no code change
-                                                        (Default: False)
+                 (Default: False)
 
            Exclude drafts|trivial-rebase|no-code-change needs
            Gerrit Trigger v2.12.0
@@ -248,13 +249,11 @@ def gerrit(parser, xml_parent, data):
 
                * **approval-value** -- Approval value for the comment added.
          * **comment-added-contains-event** (`dict`) -- Trigger on comment
-                                                        added contains
-                                                        Regular Expression.
+           added contains Regular Expression.
 
            :Comment added contains:
                * **comment-contains-value** (`str`) -- Comment contains
-                                                       Regular Expression
-                                                       value.
+                 Regular Expression value.
 
     :arg bool trigger-on-patchset-uploaded-event: Trigger on patchset upload.
 
@@ -296,16 +295,28 @@ def gerrit(parser, xml_parent, data):
         .. deprecated:: 1.1.0. Please use :ref:`trigger-on <trigger_on>`.
 
     :arg bool override-votes: Override default vote values
+    :arg int gerrit-build-started-verified-value: Started ''Verified'' value
     :arg int gerrit-build-successful-verified-value: Successful ''Verified''
         value
     :arg int gerrit-build-failed-verified-value: Failed ''Verified'' value
+    :arg int gerrit-build-unstable-verified-value: Unstable ''Verified'' value
+    :arg int gerrit-build-notbuilt-verified-value: Not built ''Verified''
+        value
+    :arg int gerrit-build-started-codereview-value: Started ''CodeReview''
+        value
     :arg int gerrit-build-successful-codereview-value: Successful
         ''CodeReview'' value
     :arg int gerrit-build-failed-codereview-value: Failed ''CodeReview'' value
+    :arg int gerrit-build-unstable-codereview-value: Unstable ''CodeReview''
+        value
+    :arg int gerrit-build-notbuilt-codereview-value: Not built ''CodeReview''
+        value
     :arg str failure-message: Message to leave on failure (default '')
     :arg str successful-message: Message to leave on success (default '')
     :arg str unstable-message: Message to leave when unstable (default '')
     :arg str notbuilt-message: Message to leave when not built (default '')
+    :arg str failure-message-file: Sets the filename within the workspace from
+        which to retrieve the unsuccessful review message. (optional)
     :arg list projects: list of projects to match
 
       :Project: * **project-compare-type** (`str`) --  ''PLAIN'', ''ANT'' or
@@ -313,8 +324,16 @@ def gerrit(parser, xml_parent, data):
                 * **project-pattern** (`str`) -- Project name pattern to match
                 * **branch-compare-type** (`str`) -- ''PLAIN'', ''ANT'' or
                   ''REG_EXP'' (not used if `branches` list is specified)
+
+                  .. deprecated:: 1.1.0  Please use :ref:`branches <branches>`.
+
                 * **branch-pattern** (`str`) -- Branch name pattern to match
-                   (not used if `branches` list is specified)
+                  (not used if `branches` list is specified)
+
+                  .. deprecated:: 1.1.0  Please use :ref:`branches <branches>`.
+
+                .. _branches:
+
                 * **branches** (`list`) -- List of branches to match
                   (optional)
 
@@ -353,6 +372,9 @@ def gerrit(parser, xml_parent, data):
         messages etc. If other non-silent jobs are triggered by the same
         Gerrit event as this job, the result of this job's build will not be
         counted in the end result of the other jobs. (default false)
+    :arg bool silent-start: Sets silent start mode to on or off. When silent
+        start mode is on there will be no 'build started' messages sent back
+        to Gerrit. (default false)
     :arg bool escape-quotes: escape quotes in the values of Gerrit change
         parameters (default true)
     :arg bool no-name-and-email: Do not pass compound 'name and email'
@@ -361,6 +383,15 @@ def gerrit(parser, xml_parent, data):
         e.g. commit message, should be as human readable or not. If false,
         those parameters are Base64 encoded to keep environment variables
         clean. (default false)
+    :arg str dependency-jobs: All jobs on which this job depends. If a commit
+        should trigger both a dependency and this job, the dependency will be
+        built first. Use commas to separate job names. Beware of cyclic
+        dependencies. (optional)
+    :arg str notification-level: Defines to whom email notifications should be
+        sent. This can either be nobody ('NONE'), the change owner ('OWNER'),
+        reviewers and change owner ('OWNER_REVIEWERS'), all interested users
+        i.e. owning, reviewing, watching, and starring ('ALL') or server
+        default ('SERVER_DEFAULT'). (default 'SERVER_DEFAULT')
     :arg bool dynamic-trigger-enabled: Enable/disable the dynamic trigger
         (default false)
     :arg str dynamic-trigger-url: if you specify this option, the Gerrit
@@ -460,12 +491,26 @@ def gerrit(parser, xml_parent, data):
     build_gerrit_skip_votes(gtrig, data)
     XML.SubElement(gtrig, 'silentMode').text = str(
         data.get('silent', False)).lower()
+    XML.SubElement(gtrig, 'silentStartMode').text = str(
+        data.get('silent-start', False)).lower()
     XML.SubElement(gtrig, 'escapeQuotes').text = str(
         data.get('escape-quotes', True)).lower()
     XML.SubElement(gtrig, 'noNameAndEmailParameters').text = str(
         data.get('no-name-and-email', False)).lower()
     XML.SubElement(gtrig, 'readableMessage').text = str(
         data.get('readable-message', False)).lower()
+    XML.SubElement(gtrig, 'dependencyJobsNames').text = str(
+        data.get('dependency-jobs', ''))
+    notification_levels = ['NONE', 'OWNER', 'OWNER_REVIEWERS', 'ALL',
+                           'SERVER_DEFAULT']
+    notification_level = data.get('notification-level', 'SERVER_DEFAULT')
+    if notification_level not in notification_levels:
+        raise InvalidAttributeError('notification-level', notification_level,
+                                    notification_levels)
+    if notification_level == 'SERVER_DEFAULT':
+        XML.SubElement(gtrig, 'notificationLevel').text = ''
+    else:
+        XML.SubElement(gtrig, 'notificationLevel').text = notification_level
     XML.SubElement(gtrig, 'dynamicTriggerConfiguration').text = str(
         data.get('dynamic-trigger-enabled', False))
     XML.SubElement(gtrig, 'triggerConfigURL').text = str(
@@ -475,14 +520,26 @@ def gerrit(parser, xml_parent, data):
     build_gerrit_triggers(gtrig, data)
     override = str(data.get('override-votes', False)).lower()
     if override == 'true':
-        for yamlkey, xmlkey in [('gerrit-build-successful-verified-value',
+        for yamlkey, xmlkey in [('gerrit-build-started-verified-value',
+                                 'gerritBuildStartedVerifiedValue'),
+                                ('gerrit-build-successful-verified-value',
                                  'gerritBuildSuccessfulVerifiedValue'),
                                 ('gerrit-build-failed-verified-value',
                                  'gerritBuildFailedVerifiedValue'),
+                                ('gerrit-build-unstable-verified-value',
+                                 'gerritBuildUnstableVerifiedValue'),
+                                ('gerrit-build-notbuilt-verified-value',
+                                 'gerritBuildNotBuiltVerifiedValue'),
+                                ('gerrit-build-started-codereview-value',
+                                 'gerritBuildStartedCodeReviewValue'),
                                 ('gerrit-build-successful-codereview-value',
-                                 'gerritBuildSuccessfulCodereviewValue'),
+                                 'gerritBuildSuccessfulCodeReviewValue'),
                                 ('gerrit-build-failed-codereview-value',
-                                 'gerritBuildFaiedCodeReviewValue')]:
+                                 'gerritBuildFailedCodeReviewValue'),
+                                ('gerrit-build-unstable-codereview-value',
+                                 'gerritBuildUnstableCodeReviewValue'),
+                                ('gerrit-build-notbuilt-codereview-value',
+                                 'gerritBuildNotBuiltCodeReviewValue')]:
             if data.get(yamlkey) is not None:
                 # str(int(x)) makes input values like '+1' work
                 XML.SubElement(gtrig, xmlkey).text = str(
@@ -497,6 +554,8 @@ def gerrit(parser, xml_parent, data):
         data.get('unstable-message', ''))
     XML.SubElement(gtrig, 'buildNotBuiltMessage').text = str(
         data.get('notbuilt-message', ''))
+    XML.SubElement(gtrig, 'buildUnsuccessfulFilepath').text = str(
+        data.get('failure-message-file', ''))
     XML.SubElement(gtrig, 'customUrl').text = str(data.get('custom-url', ''))
     XML.SubElement(gtrig, 'serverName').text = str(
         data.get('server-name', '__ANY__'))
@@ -839,13 +898,18 @@ def reverse(parser, xml_parent, data):
     "Post-build Actions" of an upstream project, but is preferable when you
     want to configure the downstream project.
 
-    :arg str jobs: List (comma separated) of jobs to watch.
+    :arg str jobs: List of jobs to watch. Can be either a comma separated
+      list or a list.
     :arg str result: Build results to monitor for between the following
       options: success, unstable and failure. (default 'success').
 
     Example:
 
     .. literalinclude:: /../../tests/triggers/fixtures/reverse.yaml
+
+    Example List:
+
+    .. literalinclude:: /../../tests/triggers/fixtures/reverse-list.yaml
     """
     reserveBuildTrigger = XML.SubElement(
         xml_parent, 'jenkins.triggers.ReverseBuildTrigger')
@@ -853,8 +917,12 @@ def reverse(parser, xml_parent, data):
     supported_thresholds = ['SUCCESS', 'UNSTABLE', 'FAILURE']
 
     XML.SubElement(reserveBuildTrigger, 'spec').text = ''
+
+    jobs = data.get('jobs')
+    if isinstance(jobs, list):
+        jobs = ",".join(jobs)
     XML.SubElement(reserveBuildTrigger, 'upstreamProjects').text = \
-        data.get('jobs')
+        jobs
 
     threshold = XML.SubElement(reserveBuildTrigger, 'threshold')
     result = data.get('result').upper()
@@ -880,6 +948,7 @@ def script(parser, xml_parent, data):
 
     :arg str label: Restrict where the polling should run. (default '')
     :arg str script: A shell or batch script. (default '')
+    :arg str script-file-path: A shell or batch script path. (default '')
     :arg str cron: cron syntax of when to run (default '')
     :arg bool enable-concurrent:  Enables triggering concurrent builds.
                                   (default false)
@@ -907,6 +976,51 @@ def script(parser, xml_parent, data):
     XML.SubElement(st, 'enableConcurrentBuild').text = str(
         data.get('enable-concurrent', False)).lower()
     XML.SubElement(st, 'exitCode').text = str(data.get('exit-code', 0))
+
+
+def groovy_script(parser, xml_parent, data):
+    """yaml: groovy-script
+    Triggers the job using a groovy script.
+    Requires the Jenkins :jenkins-wiki:`ScriptTrigger Plugin
+    <ScriptTrigger+Plugin>`.
+
+    :arg bool system-script: If true, run the groovy script as a system script,
+      the script will have access to the same variables as the Groovy Console.
+      If false, run the groovy script on the executor node, the script will not
+      have access to the hudson or job model. (default false)
+    :arg str script: Content of the groovy script. If the script result is
+      evaluated to true, a build is scheduled. (default '')
+    :arg str script-file-path: Groovy script path. (default '')
+    :arg str property-file-path: Property file path. All properties will be set
+      as parameters for the triggered build. (optional)
+    :arg bool enable-concurrent: Enable concurrent build. (default false)
+    :arg str label: Restrict where the polling should run. (default '')
+    :arg str cron: cron syntax of when to run (default '')
+
+    Example:
+
+    .. literalinclude:: /../../tests/triggers/fixtures/groovy-script.yaml
+    """
+    gst = XML.SubElement(
+        xml_parent,
+        'org.jenkinsci.plugins.scripttrigger.groovy.GroovyScriptTrigger'
+    )
+
+    XML.SubElement(gst, 'groovySystemScript').text = str(
+        data.get('system-script', False)).lower()
+    XML.SubElement(gst, 'groovyExpression').text = str(data.get('script', ''))
+    XML.SubElement(gst, 'groovyFilePath').text = str(data.get(
+        'script-file-path', ''))
+    if 'property-file-path' in data:
+        XML.SubElement(gst, 'propertiesFilePath').text = str(
+            data.get('property-file-path'))
+    XML.SubElement(gst, 'enableConcurrentBuild').text = str(
+        data.get('enable-concurrent', False)).lower()
+    label = data.get('label')
+    XML.SubElement(gst, 'labelRestriction').text = str(bool(label)).lower()
+    if label:
+        XML.SubElement(gst, 'triggerLabel').text = label
+    XML.SubElement(gst, 'spec').text = str(data.get('cron', ''))
 
 
 class Triggers(jenkins_jobs.modules.base.Base):

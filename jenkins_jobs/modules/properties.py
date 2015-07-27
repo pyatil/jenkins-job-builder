@@ -72,14 +72,9 @@ def ownership(parser, xml_parent, data):
     :arg str owner: the owner of job
     :arg list co-owners: list of job co-owners
 
-    Example::
+    Example:
 
-        properties:
-         - ownership:
-            owner: abraverm
-            co-owners:
-             - lbednar
-             - edolinin
+    .. literalinclude:: /../../tests/properties/fixtures/ownership.yaml
     """
     ownership_plugin = \
         XML.SubElement(xml_parent,
@@ -192,7 +187,7 @@ def throttle(parser, xml_parent, data):
     XML.SubElement(throttle, 'maxConcurrentTotal').text = str(
         data.get('max-total', '0'))
     # TODO: What's "categories"?
-    #XML.SubElement(throttle, 'categories')
+    # XML.SubElement(throttle, 'categories')
     if data.get('enabled', True):
         XML.SubElement(throttle, 'throttleEnabled').text = 'true'
     else:
@@ -205,6 +200,32 @@ def throttle(parser, xml_parent, data):
 
     XML.SubElement(throttle, 'throttleOption').text = data.get('option')
     XML.SubElement(throttle, 'configVersion').text = '1'
+
+
+def sidebar(parser, xml_parent, data):
+    """yaml: sidebar
+    Allows you to add links in the sidebar.
+    Requires the Jenkins :jenkins-wiki:`Sidebar Plugin <Sidebar+Plugin>`.
+
+    :arg str url: url to link to (optional)
+    :arg str text: text for the link (optional)
+    :arg str icon: path to icon (optional)
+
+    Example:
+
+    .. literalinclude:: /../../tests/properties/fixtures/sidebar02.yaml
+    """
+    sidebar = xml_parent.find('hudson.plugins.sidebar__link.ProjectLinks')
+    if sidebar is None:
+        sidebar = XML.SubElement(xml_parent,
+                                 'hudson.plugins.sidebar__link.ProjectLinks')
+        links = XML.SubElement(sidebar, 'links')
+    else:
+        links = sidebar.find('links')
+    action = XML.SubElement(links, 'hudson.plugins.sidebar__link.LinkAction')
+    XML.SubElement(action, 'url').text = str(data.get('url', ''))
+    XML.SubElement(action, 'text').text = str(data.get('text', ''))
+    XML.SubElement(action, 'icon').text = str(data.get('icon', ''))
 
 
 def inject(parser, xml_parent, data):

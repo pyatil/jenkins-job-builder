@@ -88,6 +88,14 @@ job_builder section
   correct one to use. When this option is set to True, only a warning is
   emitted.
 
+**allow_empty_variables**
+  (Optional) When expanding strings, by default `jenkins-jobs` will raise an
+  exception if there's a key in the string, that has not been declared on the
+  yamls. Setting this options to True, will replace it with the empty string,
+  allowing you to use those strings without having to define all the keys it
+  might be using.
+
+
 jenkins section
 ^^^^^^^^^^^^^^^
 
@@ -105,6 +113,31 @@ jenkins section
 
 **url**
   The base URL for your Jenkins installation.
+
+**query_plugins_info**
+  Whether to query the Jenkins instance for plugin info when a configuration
+  file is provided. If a configuration file is not provided `jenkins-jobs` will
+  ignore this setting and skip querying for plugin information. True by
+  default.
+
+
+hipchat section
+^^^^^^^^^^^^^^^
+
+**send-as**
+  This is the hipchat user name that will be used when sending notifications.
+
+**authtoken**
+  The API token necessary to send messages to hipchat.  This can be generated in
+  the hipchat web interface by a user with administrative access for your
+  organization. This is the authtoken is set for each job individually; the
+  JJB Hipchat Plugin does not currently support setting different tokens for
+  different projects, so the token you use will have to be scoped such that it
+  can be used for any room your jobs might be configured to notify. For more
+  information on this topic, please see the `Hipchat API Documentation`__
+
+__ https://www.hipchat.com/docs/apiv2/auth
+
 
 
 Running

@@ -190,7 +190,7 @@ class TestTests(CmdTestsBase):
                          "http://test-jenkins.with.non.default.url:8080/")
 
     @mock.patch('jenkins_jobs.builder.YamlParser.generateXML')
-    @mock.patch('jenkins_jobs.builder.ModuleRegistry')
+    @mock.patch('jenkins_jobs.parser.ModuleRegistry')
     def test_plugins_info_stub_option(self, registry_mock, generateXML_mock):
         """
         Test handling of plugins_info stub option.
@@ -214,7 +214,7 @@ class TestTests(CmdTestsBase):
         registry_mock.assert_called_with(self.config, plugins_info_list)
 
     @mock.patch('jenkins_jobs.builder.YamlParser.generateXML')
-    @mock.patch('jenkins_jobs.builder.ModuleRegistry')
+    @mock.patch('jenkins_jobs.parser.ModuleRegistry')
     def test_bogus_plugins_info_stub_option(self, registry_mock,
                                             generateXML_mock):
         """
@@ -264,3 +264,30 @@ class TestJenkinsGetPluginInfoError(CmdTestsBase):
                 self.fail("jenkins.JenkinsException propagated to main")
             except:
                 pass  # only care about jenkins.JenkinsException for now
+
+    @mock.patch('jenkins.Jenkins.get_plugins_info')
+    def test_skip_plugin_retrieval_if_no_config_provided(
+            self, get_plugins_info_mock):
+        """
+        Verify that retrieval of information from Jenkins instance about its
+        plugins will be skipped when run if no config file provided.
+        """
+        with mock.patch('sys.stdout'):
+            cmd.main(['test', os.path.join(self.fixtures_path,
+                                           'cmd-001.yaml')])
+        self.assertFalse(get_plugins_info_mock.called)
+
+    @mock.patch('jenkins.Jenkins.get_plugins_info')
+    def test_skip_plugin_retrieval_if_disabled(self, get_plugins_info_mock):
+        """
+        Verify that retrieval of information from Jenkins instance about its
+        plugins will be skipped when run if a config file provided and disables
+        querying through a config option.
+        """
+        with mock.patch('sys.stdout'):
+            cmd.main(['--conf',
+                      os.path.join(self.fixtures_path,
+                                   'disable-query-plugins.conf'),
+                      'test',
+                      os.path.join(self.fixtures_path, 'cmd-001.yaml')])
+        self.assertFalse(get_plugins_info_mock.called)

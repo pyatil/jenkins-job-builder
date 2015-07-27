@@ -36,14 +36,17 @@ ignore_cache=False
 recursive=False
 exclude=.*
 allow_duplicates=False
+allow_empty_variables=False
 
 [jenkins]
 url=http://localhost:8080/
 user=
 password=
+query_plugins_info=True
 
 [hipchat]
 authtoken=dummy
+send-as=Jenkins
 """
 
 
@@ -95,7 +98,6 @@ def create_parser():
                                       dest='command')
 
     # subparser: update
-
     parser_update = subparser.add_parser('update', parents=[recursive_parser])
     parser_update.add_argument('path', help='colon-separated list of paths to'
                                             ' YAML files or directories')
@@ -105,7 +107,6 @@ def create_parser():
                                dest='delete_old', default=False,)
 
     # subparser: test
-
     parser_test = subparser.add_parser('test', parents=[recursive_parser])
     parser_test.add_argument('path', help='colon-separated list of paths to'
                                           ' YAML files or directories',
@@ -117,7 +118,6 @@ def create_parser():
     parser_test.add_argument('name', help='name(s) of job(s)', nargs='*')
 
     # subparser: delete
-
     parser_delete = subparser.add_parser('delete', parents=[recursive_parser])
     parser_delete.add_argument('name', help='name of job', nargs='+')
     parser_delete.add_argument('-p', '--path', default=None,
@@ -125,7 +125,6 @@ def create_parser():
                                     ' YAML files or directories')
 
     # subparser: delete-all
-
     subparser.add_parser('delete-all',
                          help='delete *ALL* jobs from Jenkins server, '
                          'including those not managed by Jenkins Job '
@@ -144,6 +143,11 @@ def create_parser():
     parser.add_argument('--version', dest='version', action='version',
                         version=version(),
                         help='show version')
+    parser.add_argument(
+        '--allow-empty-variables', action='store_true',
+        dest='allow_empty_variables', default=None,
+        help='Don\'t fail if any of the variables inside any string are not '
+        'defined, replace with empty string instead')
 
     return parser
 
@@ -181,7 +185,7 @@ def setup_config_settings(options):
         if os.path.isfile(localconf):
             conf = localconf
     config = configparser.ConfigParser()
-    ## Load default config always
+    # Load default config always
     config.readfp(StringIO(DEFAULT_CONF))
     if os.path.isfile(conf):
         logger.debug("Reading config from {0}".format(conf))
@@ -232,6 +236,15 @@ def execute(options, config):
         if not isinstance(plugins_info, list):
             raise JenkinsJobsException("{0} must contain a Yaml list!"
                                        .format(options.plugins_info_path))
+    elif (not options.conf or not
+          config.getboolean("jenkins", "query_plugins_info")):
+        logger.debug("Skipping plugin info retrieval")
+        plugins_info = {}
+
+    if options.allow_empty_variables is not None:
+        config.set('job_builder',
+                   'allow_empty_variables',
+                   str(options.allow_empty_variables))
 
     builder = Builder(config.get('jenkins', 'url'),
                       user,
@@ -278,9 +291,12 @@ def execute(options, config):
     elif options.command == 'update':
         logger.info("Updating jobs in {0} ({1})".format(
             options.path, options.names))
-        jobs = builder.update_job(options.path, options.names)
+        jobs, num_updated_jobs = builder.update_job(options.path,
+                                                    options.names)
+        logger.info("Number of jobs updated: %d", num_updated_jobs)
         if options.delete_old:
-            builder.delete_old_managed(keep=[x.name for x in jobs])
+            num_deleted_jobs = builder.delete_old_managed()
+            logger.info("Number of jobs deleted: %d", num_deleted_jobs)
     elif options.command == 'test':
         builder.update_job(options.path, options.name,
                            output=options.output_dir)

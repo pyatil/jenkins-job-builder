@@ -24,9 +24,17 @@ Wrappers can alter the way the build is run as well as the build output.
 
 import logging
 import xml.etree.ElementTree as XML
+import pkg_resources
 import jenkins_jobs.modules.base
-from jenkins_jobs.errors import JenkinsJobsException
+from jenkins_jobs.errors import (JenkinsJobsException,
+                                 InvalidAttributeError,
+                                 MissingAttributeError)
 from jenkins_jobs.modules.builders import create_builders
+from jenkins_jobs.modules.helpers import config_file_provider_builder
+
+logger = logging.getLogger(__name__)
+
+MIN_TO_SEC = 60
 
 
 def ci_skip(parser, xml_parent, data):
@@ -64,15 +72,15 @@ def config_file_provider(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Config File Provider Plugin
     <Config+File+Provider+Plugin>`.
 
-    :arg list files: List of managed config files made up of three\
+    :arg list files: List of managed config files made up of three
       parameters
 
-        :Parameter: * **file-id** (`str`)\
-        The identifier for the managed config file
-        :Parameter: * **target** (`str`)\
-        Define where the file should be created (optional)
-        :Parameter: * **variable** (`str`)\
-        Define an environment variable to be used (optional)
+      :files: * **file-id** (`str`) -- The identifier for the managed config
+                file
+              * **target** (`str`) -- Define where the file should be created
+                (optional)
+              * **variable** (`str`) -- Define an environment variable to be
+                used (optional)
 
     Example:
 
@@ -80,23 +88,10 @@ def config_file_provider(parser, xml_parent, data):
     /../../tests/wrappers/fixtures/config-file-provider003.yaml
        :language: yaml
     """
-    top = XML.SubElement(xml_parent, 'org.jenkinsci.plugins.configfiles.'
+    cfp = XML.SubElement(xml_parent, 'org.jenkinsci.plugins.configfiles.'
                          'buildwrapper.ConfigFileBuildWrapper')
-    xml_files = XML.SubElement(top, 'managedFiles')
-
-    files = data.get('files', [])
-    for file in files:
-        xml_file = XML.SubElement(xml_files, 'org.jenkinsci.plugins.'
-                                  'configfiles.buildwrapper.ManagedFile')
-        file_id = file.get('file-id')
-        if file_id is None:
-            raise JenkinsJobsException("file-id is required for each "
-                                       "managed configuration file")
-        XML.SubElement(xml_file, 'fileId').text = str(file_id)
-        XML.SubElement(xml_file, 'targetLocation').text = \
-            file.get('target', '')
-        XML.SubElement(xml_file, 'variable').text = \
-            file.get('variable', '')
+    cfp.set('plugin', 'config-file-provider')
+    config_file_provider_builder(cfp, data)
 
 
 def logfilesize(parser, xml_parent, data):
@@ -141,50 +136,153 @@ def timeout(parser, xml_parent, data):
     <Build-timeout+Plugin>`.
 
     :arg bool fail: Mark the build as failed (default false)
+    :arg bool abort: Mark the build as aborted (default false)
     :arg bool write-description: Write a message in the description
         (default false)
     :arg int timeout: Abort the build after this number of minutes (default 3)
     :arg str timeout-var: Export an environment variable to reference the
         timeout value (optional)
     :arg str type: Timeout type to use (default absolute)
-    :arg int elastic-percentage: Percentage of the three most recent builds
-        where to declare a timeout (default 0)
-    :arg int elastic-default-timeout: Timeout to use if there were no previous
-        builds (default 3)
-
     :type values:
-     * **likely-stuck**
-     * **elastic**
-     * **absolute**
+        * **likely-stuck**
+        * **no-activity**
+        * **elastic**
+        * **absolute**
 
-    Example:
+    :arg int elastic-percentage: Percentage of the three most recent builds
+        where to declare a timeout, only applies to **elastic** type.
+        (default 0)
+    :arg int elastic-number-builds: Number of builds to consider computing
+        average duration, only applies to **elastic** type. (default 3)
+    :arg int elastic-default-timeout: Timeout to use if there were no previous
+        builds, only applies to **elastic** type. (default 3)
 
-    .. literalinclude:: /../../tests/wrappers/fixtures/timeout001.yaml
+    Example (Version < 1.14):
 
-    .. literalinclude:: /../../tests/wrappers/fixtures/timeout002.yaml
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout/timeout001.yaml
 
-    .. literalinclude:: /../../tests/wrappers/fixtures/timeout003.yaml
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout/timeout002.yaml
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/timeout/timeout003.yaml
+
+    Example (Version >= 1.14):
+
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/timeout/version-1.14/absolute001.yaml
+
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/timeout/version-1.14/no-activity001.yaml
+
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/timeout/version-1.14/likely-stuck001.yaml
+
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/timeout/version-1.14/elastic001.yaml
+
     """
-    twrapper = XML.SubElement(xml_parent,
-                              'hudson.plugins.build__timeout.'
-                              'BuildTimeoutWrapper')
-    XML.SubElement(twrapper, 'timeoutMinutes').text = str(
-        data.get('timeout', 3))
-    timeout_env_var = data.get('timeout-var')
-    if timeout_env_var:
-        XML.SubElement(twrapper, 'timeoutEnvVar').text = str(timeout_env_var)
-    XML.SubElement(twrapper, 'failBuild').text = str(
-        data.get('fail', 'false')).lower()
-    XML.SubElement(twrapper, 'writingDescription').text = str(
-        data.get('write-description', 'false')).lower()
-    XML.SubElement(twrapper, 'timeoutPercentage').text = str(
-        data.get('elastic-percentage', 0))
-    XML.SubElement(twrapper, 'timeoutMinutesElasticDefault').text = str(
-        data.get('elastic-default-timeout', 3))
-    tout_type = str(data.get('type', 'absolute')).lower()
-    if tout_type == 'likely-stuck':
-        tout_type = 'likelyStuck'
-    XML.SubElement(twrapper, 'timeoutType').text = tout_type
+    prefix = 'hudson.plugins.build__timeout.'
+    twrapper = XML.SubElement(xml_parent, prefix + 'BuildTimeoutWrapper')
+
+    plugin_info = parser.registry.get_plugin_info(
+        "Jenkins build timeout plugin")
+    version = pkg_resources.parse_version(plugin_info.get("version", "0"))
+
+    valid_strategies = ['absolute', 'no-activity', 'likely-stuck', 'elastic']
+
+    if version >= pkg_resources.parse_version("1.14"):
+        strategy = data.get('type', 'absolute')
+        if strategy not in valid_strategies:
+            InvalidAttributeError('type', strategy, valid_strategies)
+
+        if strategy == "absolute":
+            strategy_element = XML.SubElement(
+                twrapper, 'strategy',
+                {'class': "hudson.plugins.build_timeout."
+                          "impl.AbsoluteTimeOutStrategy"})
+            XML.SubElement(strategy_element, 'timeoutMinutes'
+                           ).text = str(data.get('timeout', 3))
+        elif strategy == "no-activity":
+            strategy_element = XML.SubElement(
+                twrapper, 'strategy',
+                {'class': "hudson.plugins.build_timeout."
+                          "impl.NoActivityTimeOutStrategy"})
+            timeout_sec = int(data.get('timeout', 3)) * MIN_TO_SEC
+            XML.SubElement(strategy_element,
+                           'timeoutSecondsString').text = str(timeout_sec)
+        elif strategy == "likely-stuck":
+            strategy_element = XML.SubElement(
+                twrapper, 'strategy',
+                {'class': "hudson.plugins.build_timeout."
+                          "impl.LikelyStuckTimeOutStrategy"})
+            XML.SubElement(strategy_element,
+                           'timeoutMinutes').text = str(data.get('timeout', 3))
+        elif strategy == "elastic":
+            strategy_element = XML.SubElement(
+                twrapper, 'strategy',
+                {'class': "hudson.plugins.build_timeout."
+                          "impl.ElasticTimeOutStrategy"})
+            XML.SubElement(strategy_element, 'timeoutPercentage'
+                           ).text = str(data.get('elastic-percentage', 0))
+            XML.SubElement(strategy_element, 'numberOfBuilds'
+                           ).text = str(data.get('elastic-number-builds', 0))
+            XML.SubElement(strategy_element, 'timeoutMinutesElasticDefault'
+                           ).text = str(data.get('elastic-default-timeout', 3))
+
+        actions = []
+
+        for action in ['fail', 'abort']:
+            if str(data.get(action, 'false')).lower() == 'true':
+                actions.append(action)
+
+        # Set the default action to "abort"
+        if len(actions) == 0:
+            actions.append("abort")
+
+        description = data.get('write-description', None)
+        if description is not None:
+            actions.append('write-description')
+
+        operation_list = XML.SubElement(twrapper, 'operationList')
+
+        for action in actions:
+            fmt_str = prefix + "operations.{0}Operation"
+            if action == "abort":
+                XML.SubElement(operation_list, fmt_str.format("Abort"))
+            elif action == "fail":
+                XML.SubElement(operation_list, fmt_str.format("Fail"))
+            elif action == "write-description":
+                write_description = XML.SubElement(
+                    operation_list, fmt_str.format("WriteDescription"))
+                XML.SubElement(write_description, "description"
+                               ).text = description
+            else:
+                raise JenkinsJobsException("Unsupported BuiltTimeoutWrapper "
+                                           "plugin action: {0}".format(action))
+        timeout_env_var = data.get('timeout-var')
+        if timeout_env_var:
+            XML.SubElement(twrapper,
+                           'timeoutEnvVar').text = str(timeout_env_var)
+    else:
+        XML.SubElement(twrapper,
+                       'timeoutMinutes').text = str(data.get('timeout', 3))
+        timeout_env_var = data.get('timeout-var')
+        if timeout_env_var:
+            XML.SubElement(twrapper,
+                           'timeoutEnvVar').text = str(timeout_env_var)
+        XML.SubElement(twrapper, 'failBuild'
+                       ).text = str(data.get('fail', 'false')).lower()
+        XML.SubElement(twrapper, 'writingDescription'
+                       ).text = str(data.get('write-description', 'false')
+                                    ).lower()
+        XML.SubElement(twrapper, 'timeoutPercentage'
+                       ).text = str(data.get('elastic-percentage', 0))
+        XML.SubElement(twrapper, 'timeoutMinutesElasticDefault'
+                       ).text = str(data.get('elastic-default-timeout', 3))
+
+        tout_type = str(data.get('type', 'absolute')).lower()
+        if tout_type == 'likely-stuck':
+            tout_type = 'likelyStuck'
+        XML.SubElement(twrapper, 'timeoutType').text = tout_type
 
 
 def timestamps(parser, xml_parent, data):
@@ -226,6 +324,34 @@ def ansicolor(parser, xml_parent, data):
     colormap = data.get('colormap')
     if colormap:
         XML.SubElement(cwrapper, 'colorMapName').text = colormap
+
+
+def live_screenshot(parser, xml_parent, data):
+    """yaml: live-screenshot
+    Show live screenshots of running jobs in the job list.
+    Requires the Jenkins :jenkins-wiki:`Live-Screenshot Plugin
+    <LiveScreenshot+Plugin>`.
+
+    :arg str full-size: name of screenshot file (default 'screenshot.png')
+    :arg str thumbnail: name of thumbnail file (default 'screenshot-thumb.png')
+
+    File type must be .png and they must be located inside the $WORKDIR.
+
+    Example using defaults:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/live_screenshot001.yaml
+
+    or specifying the files to use:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/live_screenshot002.yaml
+    """
+    live = XML.SubElement(
+        xml_parent,
+        'org.jenkinsci.plugins.livescreenshot.LiveScreenshotBuildWrapper')
+    XML.SubElement(live, 'fullscreenFilename').text = data.get(
+        'full-size', 'screenshot.png')
+    XML.SubElement(live, 'thumbnailFilename').text = data.get(
+        'thumbnail', 'screenshot-thumb.png')
 
 
 def mask_passwords(parser, xml_parent, data):
@@ -1224,14 +1350,24 @@ def credentials_binding(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Credentials Binding Plugin
     <Credentials+Binding+Plugin>` version 1.1 or greater.
 
-    :arg list binding-type: List of each bindings to create.  Bindings may be\
-                            of type `zip-file`, `file`, `username-password`,\
-                            or `text`
+    :arg list binding-type: List of each bindings to create.  Bindings may be
+      of type `zip-file`, `file`, `username-password`, `text` or
+      `username-password-separated`.
+      username-password sets a variable to the username and password given in
+      the credentials, separated by a colon.
+      username-password-separated sets one variable to the username and one
+      variable to the password given in the credentials.
 
-        :Parameters: * **credential-id** (`str`) UUID of the credential being\
-                                                 referenced
-                     * **variable** (`str`) Environment variable where the\
-                                            credential will be stored
+        :Parameters: * **credential-id** (`str`) UUID of the credential being
+                       referenced
+                     * **variable** (`str`) Environment variable where the
+                       credential will be stored
+                     * **username** (`str`) Environment variable for the
+                       username (Required for binding-type
+                       username-password-separated)
+                     * **password** (`str`) Environment variable for the
+                       password (Required for binding-type
+                       username-password-separated)
 
     Example:
 
@@ -1250,6 +1386,9 @@ def credentials_binding(parser, xml_parent, data):
         'file': 'org.jenkinsci.plugins.credentialsbinding.impl.FileBinding',
         'username-password': 'org.jenkinsci.plugins.credentialsbinding.impl.'
                              'UsernamePasswordBinding',
+        'username-password-separated': 'org.jenkinsci.plugins.'
+                                       'credentialsbinding.impl.'
+                                       'UsernamePasswordMultiBinding',
         'text': 'org.jenkinsci.plugins.credentialsbinding.impl.StringBinding'
     }
     if not data:
@@ -1264,8 +1403,17 @@ def credentials_binding(parser, xml_parent, data):
 
             binding_xml = XML.SubElement(bindings_xml,
                                          binding_types[binding_type])
-            variable_xml = XML.SubElement(binding_xml, 'variable')
-            variable_xml.text = params.get('variable')
+            if binding_type == 'username-password-separated':
+                try:
+                    XML.SubElement(binding_xml, 'usernameVariable'
+                                   ).text = params['username']
+                    XML.SubElement(binding_xml, 'passwordVariable'
+                                   ).text = params['password']
+                except KeyError as e:
+                    raise MissingAttributeError(e.args[0])
+            else:
+                variable_xml = XML.SubElement(binding_xml, 'variable')
+                variable_xml.text = params.get('variable')
             credential_xml = XML.SubElement(binding_xml, 'credentialsId')
             credential_xml.text = params.get('credential-id')
 
@@ -1350,6 +1498,67 @@ def job_log_logger(parser, xml_parent, data):
                          'JobLogLoggerBuildWrapper')
     XML.SubElement(top, 'suppressEmpty').text = str(
         data.get('suppress-empty', True)).lower()
+
+
+def xvfb(parser, xml_parent, data):
+    """yaml: xvfb
+    Enable xvfb during the build.
+    Requires the Jenkins :jenkins-wiki:`Xvfb Plugin <Xvfb+Plugin>`.
+
+    :arg str installation-name: The name of the Xvfb tool instalation
+                                (default: default)
+    :arg bool auto-display-name: Uses the -displayfd option of Xvfb by which it
+                                 chooses it's own display name
+                                 (default: false)
+    :arg str display-name: Ordinal of the display Xvfb will be running on, if
+                           left empty choosen based on current build executor
+                           number (optional)
+    :arg str assigned-labels: If you want to start Xvfb only on specific nodes
+                              specify its name or label (optional)
+    :arg bool parallel-build: When running multiple Jenkins nodes on the same
+                              machine this setting influences the display
+                              number generation (default: false)
+    :arg int timeout: A timeout of given seconds to wait before returning
+                      control to the job (default: 0)
+    :arg str screen: Resolution and color depth. (default: 1024x768x24)
+    :arg str display-name-offset: Offset for display names. (default: 1)
+    :arg str additional-options: Additional options to be added with the
+                                 options above to the Xvfb command line
+                                 (optional)
+    :arg bool debug: If Xvfb output should appear in console log of this job
+                     (default: false)
+    :arg bool shutdown-with-build: Should the display be kept until the whole
+                                   job ends (default: false)
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/xvfb001.yaml
+
+    """
+    xwrapper = XML.SubElement(xml_parent,
+                              'org.jenkinsci.plugins.xvfb.XvfbBuildWrapper')
+    XML.SubElement(xwrapper, 'installationName').text = str(data.get(
+        'installation-name', 'default'))
+    XML.SubElement(xwrapper, 'autoDisplayName').text = str(data.get(
+        'auto-display-name', False)).lower()
+    if 'display-name' in data:
+        XML.SubElement(xwrapper, 'displayName').text = str(data.get(
+            'display-name', ''))
+    XML.SubElement(xwrapper, 'assignedLabels').text = str(data.get(
+        'assigned-labels', ''))
+    XML.SubElement(xwrapper, 'parallelBuild').text = str(data.get(
+        'parallel-build', False)).lower()
+    XML.SubElement(xwrapper, 'timeout').text = str(data.get('timeout', '0'))
+    XML.SubElement(xwrapper, 'screen').text = str(data.get(
+        'screen', '1024x768x24'))
+    XML.SubElement(xwrapper, 'displayNameOffset').text = str(data.get(
+        'display-name-offset', '1'))
+    XML.SubElement(xwrapper, 'additionalOptions').text = str(data.get(
+        'additional-options', ''))
+    XML.SubElement(xwrapper, 'debug').text = str(data.get(
+        'debug', False)).lower()
+    XML.SubElement(xwrapper, 'shutdownWithBuild').text = str(data.get(
+        'shutdown-with-build', False)).lower()
 
 
 class Wrappers(jenkins_jobs.modules.base.Base):
