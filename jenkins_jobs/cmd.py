@@ -14,6 +14,7 @@
 # under the License.
 
 import argparse
+import io
 from six.moves import configparser, StringIO
 import fnmatch
 import logging
@@ -40,8 +41,6 @@ allow_empty_variables=False
 
 [jenkins]
 url=http://localhost:8080/
-user=
-password=
 query_plugins_info=True
 
 [hipchat]
@@ -189,7 +188,7 @@ def setup_config_settings(options):
     config.readfp(StringIO(DEFAULT_CONF))
     if os.path.isfile(conf):
         logger.debug("Reading config from {0}".format(conf))
-        conffp = open(conf, 'r')
+        conffp = io.open(conf, 'r', encoding='utf-8')
         config.readfp(conffp)
     elif options.command == 'test':
         logger.debug("Not requiring config for test output generation")
@@ -217,21 +216,56 @@ def execute(options, config):
     elif config.has_option('job_builder', 'ignore_cache'):
         ignore_cache = config.getboolean('job_builder', 'ignore_cache')
 
-    # workaround for python 2.6 interpolation error
+    # Jenkins supports access as an anonymous user, which can be used to
+    # ensure read-only behaviour when querying the version of plugins
+    # installed for test mode to generate XML output matching what will be
+    # uploaded. To enable must pass 'None' as the value for user and password
+    # to python-jenkins
+    #
+    # catching 'TypeError' is a workaround for python 2.6 interpolation error
     # https://bugs.launchpad.net/openstack-ci/+bug/1259631
     try:
         user = config.get('jenkins', 'user')
     except (TypeError, configparser.NoOptionError):
         user = None
+
     try:
         password = config.get('jenkins', 'password')
     except (TypeError, configparser.NoOptionError):
         password = None
 
+    # Inform the user as to what is likely to happen, as they may specify
+    # a real jenkins instance in test mode to get the plugin info to check
+    # the XML generated.
+    if user is None and password is None:
+        logger.info("Will use anonymous access to Jenkins if needed.")
+    elif (user is not None and password is None) or (
+            user is None and password is not None):
+        raise JenkinsJobsException(
+            "Cannot authenticate to Jenkins with only one of User and "
+            "Password provided, please check your configuration."
+        )
+
+    # None -- no timeout, blocking mode; same as setblocking(True)
+    # 0.0 -- non-blocking mode; same as setblocking(False) <--- default
+    # > 0 -- timeout mode; operations time out after timeout seconds
+    # < 0 -- illegal; raises an exception
+    # to retain the default must use
+    # "timeout=jenkins_jobs.builder._DEFAULT_TIMEOUT" or not set timeout at
+    # all.
+    timeout = jenkins_jobs.builder._DEFAULT_TIMEOUT
+    try:
+        timeout = config.getfloat('jenkins', 'timeout')
+    except (ValueError):
+        raise JenkinsJobsException("Jenkins timeout config is invalid")
+    except (TypeError, configparser.NoOptionError):
+        pass
+
     plugins_info = None
 
     if getattr(options, 'plugins_info_path', None) is not None:
-        with open(options.plugins_info_path, 'r') as yaml_file:
+        with io.open(options.plugins_info_path, 'r',
+                     encoding='utf-8') as yaml_file:
             plugins_info = yaml.load(yaml_file)
         if not isinstance(plugins_info, list):
             raise JenkinsJobsException("{0} must contain a Yaml list!"
@@ -250,6 +284,7 @@ def execute(options, config):
                       user,
                       password,
                       config,
+                      jenkins_timeout=timeout,
                       ignore_cache=ignore_cache,
                       flush_cache=options.flush_cache,
                       plugins_list=plugins_info)

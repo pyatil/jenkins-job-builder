@@ -16,6 +16,7 @@
 # Manage jobs in Jenkins server
 
 import errno
+import io
 import os
 import operator
 import hashlib
@@ -30,6 +31,8 @@ from jenkins_jobs.constants import MAGIC_MANAGE_STRING
 from jenkins_jobs.parser import YamlParser
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_TIMEOUT = object()
 
 
 class CacheStorage(object):
@@ -49,7 +52,7 @@ class CacheStorage(object):
         if flush or not os.path.isfile(self.cachefilename):
             self.data = {}
         else:
-            with open(self.cachefilename, 'r') as yfile:
+            with io.open(self.cachefilename, 'r', encoding='utf-8') as yfile:
                 self.data = yaml.load(yfile)
         logger.debug("Using cache: '{0}'".format(self.cachefilename))
 
@@ -83,7 +86,8 @@ class CacheStorage(object):
         # due to an exception occurring in the __init__
         if getattr(self, 'data', None) is not None:
             try:
-                with open(self.cachefilename, 'w') as yfile:
+                with io.open(self.cachefilename, 'w',
+                             encoding='utf-8') as yfile:
                     self._yaml.dump(self.data, yfile)
             except Exception as e:
                 self._logger.error("Failed to write to cache file '%s' on "
@@ -98,8 +102,11 @@ class CacheStorage(object):
 
 
 class Jenkins(object):
-    def __init__(self, url, user, password):
-        self.jenkins = jenkins.Jenkins(url, user, password)
+    def __init__(self, url, user, password, timeout=_DEFAULT_TIMEOUT):
+        if timeout != _DEFAULT_TIMEOUT:
+            self.jenkins = jenkins.Jenkins(url, user, password, timeout)
+        else:
+            self.jenkins = jenkins.Jenkins(url, user, password)
         self._jobs = None
         self._job_list = None
 
@@ -142,6 +149,13 @@ class Jenkins(object):
             logger.info("Deleting jenkins job {0}".format(job_name))
             self.jenkins.delete_job(job_name)
 
+    def delete_all_jobs(self):
+        # execute a groovy script to delete all jobs is much faster than
+        # using the doDelete REST endpoint to delete one job at a time.
+        script = ('for(job in jenkins.model.Jenkins.theInstance.getProjects())'
+                  '       { job.delete(); }')
+        self.jenkins.run_script(script)
+
     def get_plugins_info(self):
         """ Return a list of plugin_info dicts, one for each plugin on the
         Jenkins instance.
@@ -181,9 +195,10 @@ class Jenkins(object):
 
 class Builder(object):
     def __init__(self, jenkins_url, jenkins_user, jenkins_password,
-                 config=None, ignore_cache=False, flush_cache=False,
-                 plugins_list=None):
-        self.jenkins = Jenkins(jenkins_url, jenkins_user, jenkins_password)
+                 config=None, jenkins_timeout=_DEFAULT_TIMEOUT,
+                 ignore_cache=False, flush_cache=False, plugins_list=None):
+        self.jenkins = Jenkins(jenkins_url, jenkins_user, jenkins_password,
+                               jenkins_timeout)
         self.cache = CacheStorage(jenkins_url, flush=flush_cache)
         self.global_config = config
         self.ignore_cache = ignore_cache
@@ -277,8 +292,7 @@ class Builder(object):
     def delete_all_jobs(self):
         jobs = self.jenkins.get_jobs()
         logger.info("Number of jobs to delete:  %d", len(jobs))
-        for job in jobs:
-            self.delete_job(job['name'])
+        self.jenkins.delete_all_jobs()
 
     def update_job(self, input_fn, jobs_glob=None, output=None):
         self.load_files(input_fn)
@@ -317,9 +331,8 @@ class Builder(object):
 
                 output_fn = os.path.join(output, job.name)
                 logger.debug("Writing XML to '{0}'".format(output_fn))
-                f = open(output_fn, 'w')
-                f.write(job.output())
-                f.close()
+                with io.open(output_fn, 'w', encoding='utf-8') as f:
+                    f.write(job.output().decode('utf-8'))
                 continue
             md5 = job.md5()
             if (self.jenkins.is_job(job.name)

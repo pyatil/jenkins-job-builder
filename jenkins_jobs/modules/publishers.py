@@ -30,8 +30,16 @@ import xml.etree.ElementTree as XML
 import jenkins_jobs.modules.base
 from jenkins_jobs.modules import hudson_model
 from jenkins_jobs.modules.helpers import build_trends_publisher
+from jenkins_jobs.modules.helpers import cloudformation_init
+from jenkins_jobs.modules.helpers import cloudformation_region_dict
+from jenkins_jobs.modules.helpers import cloudformation_stack
 from jenkins_jobs.modules.helpers import config_file_provider_settings
 from jenkins_jobs.modules.helpers import findbugs_settings
+from jenkins_jobs.modules.helpers import get_value_from_yaml_or_config_file
+from jenkins_jobs.modules.helpers import artifactory_deployment_patterns
+from jenkins_jobs.modules.helpers import artifactory_env_vars_patterns
+from jenkins_jobs.modules.helpers import artifactory_optional_props
+from jenkins_jobs.modules.helpers import artifactory_common_details
 from jenkins_jobs.errors import (InvalidAttributeError,
                                  JenkinsJobsException,
                                  MissingAttributeError)
@@ -52,6 +60,8 @@ def archive(parser, xml_parent, data):
       successful build
     :arg bool allow-empty:  pass the build if no artifacts are
       found (default false)
+    :arg bool only-if-success: archive artifacts only if build is successful
+      (default false)
     :arg bool fingerprint: fingerprint all archived artifacts (default false)
 
     Example:
@@ -82,6 +92,10 @@ def archive(parser, xml_parent, data):
         empty = XML.SubElement(archiver, 'allowEmptyArchive')
         # Default behavior is to fail the build.
         empty.text = str(data.get('allow-empty', False)).lower()
+
+    if 'only-if-success' in data:
+        success = XML.SubElement(archiver, 'onlyIfSuccessful')
+        success.text = str(data.get('only-if-success', False)).lower()
 
     if 'fingerprint' in data:
         fingerprint = XML.SubElement(archiver, 'fingerprint')
@@ -203,6 +217,27 @@ def javadoc(parser, xml_parent, data):
         'keep-all-successful', False)).lower()
 
 
+def jdepend(parser, xml_parent, data):
+    """yaml: jdepend
+    Publish jdepend report
+    Requires the :jenkins-wiki:`JDepend Plugin<JDepend+Plugin>`.
+
+    :arg str file: path to jdepend file (required)
+
+    Example:
+
+    .. literalinclude::  /../../tests/publishers/fixtures/jdepend001.yaml
+       :language: yaml
+    """
+    jdepend = XML.SubElement(
+        xml_parent,
+        'hudson.plugins.jdepend.JDependRecorder')
+    filepath = data.get('file', None)
+    if filepath is None:
+        raise MissingAttributeError('file')
+    XML.SubElement(jdepend, 'configuredJDependFile').text = str(filepath)
+
+
 def campfire(parser, xml_parent, data):
     """yaml: campfire
     Send build notifications to Campfire rooms.
@@ -284,11 +319,25 @@ def trigger_parameterized_builds(parser, xml_parent, data):
     :arg bool node-parameters: Use the same Node for the triggered builds
       that was used for this build. (optional)
     :arg bool svn-revision: Pass svn revision to the triggered job (optional)
+    :arg bool include-upstream: Include/pass through Upstream SVN Revisons.
+        Only valid when 'svn-revision' is true. (default false)
     :arg bool git-revision: Pass git revision to the other job (optional)
-    :arg str condition: when to trigger the other job (default 'ALWAYS')
+    :arg bool combine-queued-commits: Combine Queued git hashes. Only valid
+        when 'git-revision' is true. (default false)
+    :arg dict boolean-parameters: Pass boolean parameters to the downstream
+        jobs. Specify the name and boolean value mapping of the parameters.
+        (optional)
+    :arg str condition: when to trigger the other job. Can be: 'SUCCESS',
+      'UNSTABLE', 'FAILED_OR_BETTER', 'UNSTABLE_OR_BETTER',
+      'UNSTABLE_OR_WORSE', 'FAILED', 'ALWAYS'. (default: 'ALWAYS')
     :arg str property-file: Use properties from file (optional)
     :arg bool fail-on-missing: Blocks the triggering of the downstream jobs
-      if any of the files are not found in the workspace (default 'False')
+        if any of the files are not found in the workspace (default 'False')
+    :arg str file-encoding: Encoding of contents of the files. If not
+        specified, default encoding of the platform is used. Only valid when
+        'property-file' is specified. (optional)
+    :arg bool trigger-with-no-params: Trigger a build even when there are
+      currently no parameters defined (default 'False')
     :arg str restrict-matrix-project: Filter that restricts the subset
         of the combinations that the downstream project will run (optional)
     :arg str node-label-name: Specify the Name for the NodeLabel parameter.
@@ -301,15 +350,15 @@ def trigger_parameterized_builds(parser, xml_parent, data):
     .. literalinclude::
         /../../tests/publishers/fixtures/trigger_parameterized_builds001.yaml
        :language: yaml
+    .. literalinclude::
+        /../../tests/publishers/fixtures/trigger_parameterized_builds003.yaml
+       :language: yaml
     """
-    tbuilder = XML.SubElement(xml_parent,
-                              'hudson.plugins.parameterizedtrigger.'
-                              'BuildTrigger')
+    pt_prefix = 'hudson.plugins.parameterizedtrigger.'
+    tbuilder = XML.SubElement(xml_parent, pt_prefix + 'BuildTrigger')
     configs = XML.SubElement(tbuilder, 'configs')
     for project_def in data:
-        tconfig = XML.SubElement(configs,
-                                 'hudson.plugins.parameterizedtrigger.'
-                                 'BuildTriggerConfig')
+        tconfig = XML.SubElement(configs, pt_prefix + 'BuildTriggerConfig')
         tconfigs = XML.SubElement(tconfig, 'configs')
         if ('predefined-parameters' in project_def
                 or 'git-revision' in project_def
@@ -319,11 +368,11 @@ def trigger_parameterized_builds(parser, xml_parent, data):
                 or 'svn-revision' in project_def
                 or 'restrict-matrix-project' in project_def
                 or 'node-label-name' in project_def
-                or 'node-label' in project_def):
+                or 'node-label' in project_def
+                or 'boolean-parameters' in project_def):
 
             if 'predefined-parameters' in project_def:
-                params = XML.SubElement(tconfigs,
-                                        'hudson.plugins.parameterizedtrigger.'
+                params = XML.SubElement(tconfigs, pt_prefix +
                                         'PredefinedBuildParameters')
                 properties = XML.SubElement(params, 'properties')
                 properties.text = project_def['predefined-parameters']
@@ -332,35 +381,33 @@ def trigger_parameterized_builds(parser, xml_parent, data):
                 params = XML.SubElement(tconfigs,
                                         'hudson.plugins.git.'
                                         'GitRevisionBuildParameters')
-                properties = XML.SubElement(params, 'combineQueuedCommits')
-                properties.text = 'false'
+                XML.SubElement(params, 'combineQueuedCommits').text = str(
+                    project_def.get('combine-queued-commits', False)).lower()
             if 'property-file' in project_def and project_def['property-file']:
                 params = XML.SubElement(tconfigs,
-                                        'hudson.plugins.parameterizedtrigger.'
-                                        'FileBuildParameters')
+                                        pt_prefix + 'FileBuildParameters')
                 properties = XML.SubElement(params, 'propertiesFile')
                 properties.text = project_def['property-file']
                 failOnMissing = XML.SubElement(params, 'failTriggerOnMissing')
                 failOnMissing.text = str(project_def.get('fail-on-missing',
                                                          False)).lower()
+                if 'file-encoding' in project_def:
+                    XML.SubElement(params, 'encoding'
+                                   ).text = project_def['file-encoding']
             if ('current-parameters' in project_def
                     and project_def['current-parameters']):
-                XML.SubElement(tconfigs,
-                               'hudson.plugins.parameterizedtrigger.'
-                               'CurrentBuildParameters')
+                XML.SubElement(tconfigs, pt_prefix + 'CurrentBuildParameters')
             if ('node-parameters' in project_def
                     and project_def['node-parameters']):
-                XML.SubElement(tconfigs,
-                               'hudson.plugins.parameterizedtrigger.'
-                               'NodeParameters')
+                XML.SubElement(tconfigs, pt_prefix + 'NodeParameters')
             if 'svn-revision' in project_def and project_def['svn-revision']:
-                XML.SubElement(tconfigs,
-                               'hudson.plugins.parameterizedtrigger.'
-                               'SubversionRevisionBuildParameters')
+                param = XML.SubElement(tconfigs, pt_prefix +
+                                       'SubversionRevisionBuildParameters')
+                XML.SubElement(param, 'includeUpstreamParameters').text = str(
+                    project_def.get('include-upstream', False)).lower()
             if ('restrict-matrix-project' in project_def
                     and project_def['restrict-matrix-project']):
-                subset = XML.SubElement(tconfigs,
-                                        'hudson.plugins.parameterizedtrigger.'
+                subset = XML.SubElement(tconfigs, pt_prefix +
                                         'matrix.MatrixSubsetBuildParameters')
                 XML.SubElement(subset, 'filter').text = \
                     project_def['restrict-matrix-project']
@@ -377,6 +424,18 @@ def trigger_parameterized_builds(parser, xml_parent, data):
                 label = XML.SubElement(params, 'nodeLabel')
                 if 'node-label' in project_def:
                     label.text = project_def['node-label']
+            if ('boolean-parameters' in project_def
+                    and project_def['boolean-parameters']):
+                params = XML.SubElement(tconfigs,
+                                        pt_prefix + 'BooleanParameters')
+                config_tag = XML.SubElement(params, 'configs')
+                param_tag_text = pt_prefix + 'BooleanParameterConfig'
+                params_list = project_def['boolean-parameters']
+                for name, value in params_list.items():
+                    param_tag = XML.SubElement(config_tag, param_tag_text)
+                    XML.SubElement(param_tag, 'name').text = name
+                    XML.SubElement(param_tag, 'value').text = str(
+                        value or False).lower()
         else:
             tconfigs.set('class', 'java.util.Collections$EmptyList')
         projects = XML.SubElement(tconfig, 'projects')
@@ -390,7 +449,8 @@ def trigger_parameterized_builds(parser, xml_parent, data):
         condition.text = project_def.get('condition', 'ALWAYS')
         trigger_with_no_params = XML.SubElement(tconfig,
                                                 'triggerWithNoParameters')
-        trigger_with_no_params.text = 'false'
+        trigger_with_no_params.text = str(
+            project_def.get('trigger-with-no-params', False)).lower()
 
 
 def trigger(parser, xml_parent, data):
@@ -926,49 +986,73 @@ def junit(parser, xml_parent, data):
                        'hudson.plugins.measurement__plots.TestDataPublisher')
 
 
+def cucumber_testresult(parser, xml_parent, data):
+    """yaml: cucumber
+    Publish cucumber test results.
+    Requires the Jenkins :jenkins-wiki:`cucumber testresult
+    <Cucumber+Test+Result+Plugin>`.
+
+    :arg str results: results filename (required)
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/publishers/fixtures/cucumber_testresult.yaml
+        :language: yaml
+
+    """
+    cucumber_result = XML.SubElement(xml_parent,
+                                     'org.jenkinsci.plugins.cucumber.'
+                                     'jsontestsupport.'
+                                     'CucumberTestResultArchiver')
+    filepath = data.get('results', None)
+    if filepath is None:
+        raise MissingAttributeError('results')
+    XML.SubElement(cucumber_result, 'testResults').text = str(filepath)
+
+
 def xunit(parser, xml_parent, data):
     """yaml: xunit
     Publish tests results. Requires the Jenkins :jenkins-wiki:`xUnit Plugin
     <xUnit+Plugin>`.
 
-    :arg str thresholdmode: whether thresholds represents an absolute \
-    number of tests or a percentage. Either 'number' or 'percent', will \
-    default to 'number' if omitted.
+    :arg str thresholdmode: Whether thresholds represents an absolute number
+        of tests or a percentage. Either 'number' or 'percent'. (default
+        'number')
+    :arg list thresholds: Thresholds for both 'failed' and 'skipped' tests.
 
-    :arg dict thresholds: list containing the thresholds for both \
-    'failed' and 'skipped' tests. Each entry should in turn have a \
-    list of "threshold name: values". The threshold names are \
-    'unstable', 'unstablenew', 'failure', 'failurenew'. Omitting a \
-    value will resort on xUnit default value (should be 0).
+        :threshold (`dict`): Threshold values to set, where missing, xUnit
+            should default to an internal value of 0. Each test threshold
+            should contain the following:
 
-    :arg int test-time-margin: Give the report time margin value (default to \
-    3000) in ms, before to fail if not new (unless the option 'Fail the build \
-    if test results were not updated this run' is checked).
+            * **unstable** (`int`)
+            * **unstablenew** (`int`)
+            * **failure** (`int`)
+            * **failurenew** (`int`)
 
-    :arg dict types: per framework configuration. The key should be \
-    one of the internal types we support:\
-    'aunit', 'boosttest', 'checktype', 'cpptest', 'cppunit', 'ctest', \
-    'embunit', 'fpcunit', 'gtest', 'junit', 'mstest', 'nunit', 'phpunit', \
-    'tusar', 'unittest', 'valgrind'.
+    :arg int test-time-margin: Give the report time margin value in ms, before
+        to fail if not new unless the option **requireupdate** is set for the
+        configured framework. (default 3000)
+    :arg list types: Frameworks to configure, and options. Supports the
+        following: ``aunit``, ``boosttest``, ``checktype``, ``cpptest``,
+        ``cppunit``, ``ctest``, ``embunit``, ``fpcunit``, ``gtest``, ``junit``,
+        ``mstest``, ``nunit``, ``phpunit``, ``tusar``, ``unittest``,
+        and ``valgrind``.
 
-    The 'custom' type is not supported.
+            The 'custom' type is not supported.
 
-    Each framework type can be configured using the following parameters:
+        :type (`dict`): each type can be configured using the following:
 
-    :arg str pattern: An Ant pattern to look for Junit result files, \
-    relative to the workspace root.
-
-    :arg bool requireupdate: fail the build whenever fresh tests \
-    results have not been found (default: true).
-
-    :arg bool deleteoutput: delete temporary JUnit files (default: true)
-
-    :arg bool skip-if-no-test-files: Skip parsing this xUnit type report if \
-    there are no test reports files (default: false).
-
-    :arg bool stoponerror: Fail the build whenever an error occur during \
-    a result file processing (default: true).
-
+            * **pattern** (`str`): An Ant pattern to look for Junit result
+              files, relative to the workspace root.
+            * **requireupdate** (`bool`): fail the build whenever fresh tests
+              results have not been found (default true).
+            * **deleteoutput** (`bool`): delete temporary JUnit files
+              (default true).
+            * **skip-if-no-test-files** (`bool`): Skip parsing this xUnit type
+              report if there are no test reports files (default false).
+            * **stoponerror** (`bool`): Fail the build whenever an error occur
+              during a result file processing (default true).
 
     Example:
 
@@ -1020,37 +1104,32 @@ def xunit(parser, xml_parent, data):
         xmlframework = XML.SubElement(xmltypes,
                                       types_to_plugin_types[framework_name])
 
-        XML.SubElement(xmlframework, 'pattern').text = \
-            supported_type[framework_name].get('pattern', '')
-        XML.SubElement(xmlframework, 'failIfNotNew').text = \
-            str(supported_type[framework_name].get(
-                'requireupdate', True)).lower()
-        XML.SubElement(xmlframework, 'deleteOutputFiles').text = \
-            str(supported_type[framework_name].get(
-                'deleteoutput', True)).lower()
-        XML.SubElement(xmlframework, 'skipNoTestFiles').text = \
-            str(supported_type[framework_name].get(
-                'skip-if-no-test-files', False)).lower()
-        XML.SubElement(xmlframework, 'stopProcessingIfError').text = \
-            str(supported_type[framework_name].get(
-                'stoponerror', True)).lower()
+        XML.SubElement(xmlframework, 'pattern').text = (
+            supported_type[framework_name].get('pattern', ''))
+        XML.SubElement(xmlframework, 'failIfNotNew').text = str(
+            supported_type[framework_name].get('requireupdate', True)).lower()
+        XML.SubElement(xmlframework, 'deleteOutputFiles').text = str(
+            supported_type[framework_name].get('deleteoutput', True)).lower()
+        XML.SubElement(xmlframework, 'skipNoTestFiles').text = str(
+            supported_type[framework_name].get('skip-if-no-test-files',
+                                               False)).lower()
+        XML.SubElement(xmlframework, 'stopProcessingIfError').text = str(
+            supported_type[framework_name].get('stoponerror', True)).lower()
 
     xmlthresholds = XML.SubElement(xunit, 'thresholds')
-    if 'thresholds' in data:
-        for t in data['thresholds']:
-            if not ('failed' in t or 'skipped' in t):
-                logger.warn(
-                    "Unrecognized threshold, should be 'failed' or 'skipped'")
-                continue
-            elname = "org.jenkinsci.plugins.xunit.threshold.%sThreshold" \
-                % next(iter(t.keys())).title()
-            el = XML.SubElement(xmlthresholds, elname)
-            for threshold_name, threshold_value in \
-                    next(iter(t.values())).items():
-                # Normalize and craft the element name for this threshold
-                elname = "%sThreshold" % threshold_name.lower().replace(
-                    'new', 'New')
-                XML.SubElement(el, elname).text = threshold_value
+    for t in data.get('thresholds', []):
+        if not ('failed' in t or 'skipped' in t):
+            logger.warn(
+                "Unrecognized threshold, should be 'failed' or 'skipped'")
+            continue
+        elname = ("org.jenkinsci.plugins.xunit.threshold.%sThreshold" %
+                  next(iter(t.keys())).title())
+        el = XML.SubElement(xmlthresholds, elname)
+        for threshold_name, threshold_value in next(iter(t.values())).items():
+            # Normalize and craft the element name for this threshold
+            elname = "%sThreshold" % threshold_name.lower().replace(
+                'new', 'New')
+            XML.SubElement(el, elname).text = threshold_value
 
     # Whether to use percent of exact number of tests.
     # Thresholdmode is either:
@@ -1059,12 +1138,11 @@ def xunit(parser, xml_parent, data):
     thresholdmode = '1'
     if 'percent' == data.get('thresholdmode', 'number'):
         thresholdmode = '2'
-    XML.SubElement(xunit, 'thresholdMode').text = \
-        thresholdmode
+    XML.SubElement(xunit, 'thresholdMode').text = thresholdmode
 
     extra_config = XML.SubElement(xunit, 'extraConfiguration')
-    XML.SubElement(extra_config, 'testTimeMargin').text = \
-        str(data.get('test-time-margin', '3000'))
+    XML.SubElement(extra_config, 'testTimeMargin').text = str(
+        data.get('test-time-margin', '3000'))
 
 
 def _violations_add_entry(xml_parent, name, data):
@@ -1551,12 +1629,18 @@ def email_ext(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Email-ext Plugin
     <Email-ext+plugin>`.
 
+    :arg bool disable-publisher: Disable the publisher, while maintaining the
+        settings. The usage model for this is when you want to test things out
+        in the build, not send out e-mails during the testing. A message will
+        be printed to the build log saying that the publisher is disabled.
+        (default false)
     :arg str recipients: Comma separated list of emails
     :arg str reply-to: Comma separated list of emails that should be in
         the Reply-To header for this project (default $DEFAULT_REPLYTO)
     :arg str content-type: The content type of the emails sent. If not set, the
         Jenkins plugin uses the value set on the main configuration page.
-        Possible values: 'html', 'text' or 'default' (default 'default')
+        Possible values: 'html', 'text', 'both-html-text' or 'default'
+        (default 'default')
     :arg str subject: Subject for the email, can include variables like
         ${BUILD_NUMBER} or even groovy or javascript code
     :arg str body: Content for the body of the email, can include variables
@@ -1646,6 +1730,7 @@ def email_ext(parser, xml_parent, data):
         'text': 'text/plain',
         'html': 'text/html',
         'default': 'default',
+        'both-html-text': 'both',
     }
     ctype = data.get('content-type', 'default')
     if ctype not in content_type_mime:
@@ -1661,10 +1746,12 @@ def email_ext(parser, xml_parent, data):
         'attachments', '')
     XML.SubElement(emailext, 'presendScript').text = data.get(
         'presend-script', '')
-    XML.SubElement(emailext, 'attachBuildLog').text = \
-        str(data.get('attach-build-log', False)).lower()
-    XML.SubElement(emailext, 'saveOutput').text = \
-        str(data.get('save-output', False)).lower()
+    XML.SubElement(emailext, 'attachBuildLog').text = str(data.get(
+        'attach-build-log', False)).lower()
+    XML.SubElement(emailext, 'saveOutput').text = str(data.get(
+        'save-output', False)).lower()
+    XML.SubElement(emailext, 'disabled').text = str(data.get(
+        'disable-publisher', False)).lower()
     XML.SubElement(emailext, 'replyTo').text = data.get('reply-to',
                                                         '$DEFAULT_REPLYTO')
     matrix_dict = {'both': 'BOTH',
@@ -2412,6 +2499,144 @@ def maven_deploy(parser, xml_parent, data):
         XML.SubElement(p, 'releaseEnvVar').text = data['release-env-var']
 
 
+def artifactory(parser, xml_parent, data):
+    """ yaml: artifactory
+    Uses/requires the Artifactory plugin to deploy artifacts to
+    Artifactory Server.
+
+    Requires the Jenkins `Artifactory Plugin.
+    :jenkins-wiki: `Artifactory Plugin <Artifactory+Plugin>`.
+
+    :arg str url: Artifactory server url (default '')
+    :arg str name: Artifactory user with permissions use for
+        connected to the selected Artifactory Server (default '')
+    :arg str release-repo-key: Release repository name (default '')
+    :arg str snapshot-repo-key: Snapshots repository name (default '')
+    :arg bool publish-build-info: Push build metadata with artifacts
+        (default False)
+    :arg bool discard-old-builds:
+        Remove older build info from Artifactory (default False)
+    :arg bool discard-build-artifacts:
+        Remove older build artifacts from Artifactory (default False)
+    :arg bool even-if-unstable: Deploy artifacts even when the build
+        is unstable (default False)
+    :arg bool run-checks: Run automatic license scanning check after the
+        build is complete (default False)
+    :arg bool include-publish-artifacts: Include the build's published
+        module artifacts in the license violation checks if they are
+        also used as dependencies for other modules in this build
+        (default False)
+    :arg bool pass-identified-downstream: When true, a build parameter
+        named ARTIFACTORY_BUILD_ROOT with a value of
+        ${JOB_NAME}-${BUILD_NUMBER} will be sent to downstream builds
+        (default False)
+    :arg bool license-auto-discovery: Tells Artifactory not to try
+        and automatically analyze and tag the build's dependencies
+        with license information upon deployment (default True)
+    :arg bool enable-issue-tracker-integration: When the Jenkins
+        JIRA plugin is enabled, synchronize information about JIRA
+        issues to Artifactory and attach issue information to build
+        artifacts (default False)
+    :arg bool aggregate-build-issues: When the Jenkins JIRA plugin
+        is enabled, include all issues from previous builds up to the
+        latest build status defined in "Aggregation Build Status"
+        (default False)
+    :arg bool allow-promotion-of-non-staged-builds: The build
+        promotion operation will be available to all successful builds
+        instead of only staged ones (default False)
+    :arg bool filter-excluded-artifacts-from-build: Add the excluded
+        files to the excludedArtifacts list and remove them from the
+        artifacts list in the build info (default False)
+    :arg str scopes:  A list of dependency scopes/configurations to run
+        license violation checks on. If left empty all dependencies from
+        all scopes will be checked (default '')
+    :arg str violation-recipients: Recipients that need to be notified
+        of license violations in the build info (default '')
+    :arg list matrix-params: Semicolon-separated list of properties to
+        attach to all deployed artifacts in addition to the default ones:
+        build.name, build.number, and vcs.revision (default [])
+    :arg str black-duck-app-name: The existing Black Duck Code Center
+        application name (default '')
+    :arg str black-duck-app-version: The existing Black Duck Code Center
+        application version (default '')
+    :arg str black-duck-report-recipients: Recipients that will be emailed
+        a report after the automatic Black Duck Code Center compliance checks
+        finished (default '')
+    :arg str black-duck-scopes: A list of dependency scopes/configurations
+        to run Black Duck Code Center compliance checks on. If left empty
+        all dependencies from all scopes will be checked (default '')
+    :arg bool black-duck-run-checks: Automatic Black Duck Code Center
+        compliance checks will occur after the build completes
+        (default False)
+    :arg bool black-duck-include-published-artifacts: Include the build's
+        published module artifacts in the license violation checks if they
+        are also used as dependencies for other modules in this build
+        (default False)
+    :arg bool auto-create-missing-component-requests: Auto create
+        missing components in Black Duck Code Center application after
+        the build is completed and deployed in Artifactory
+        (default True)
+    :arg bool auto-discard-stale-component-requests: Auto discard
+        stale components in Black Duck Code Center application after
+        the build is completed and deployed in Artifactory
+        (default True)
+    :arg bool deploy-artifacts: Push artifacts to the Artifactory
+        Server. Use deployment-include-patterns and
+        deployment-exclude-patterns to filter deploy artifacts. (default True)
+    :arg list deployment-include-patterns: New line or comma separated mappings
+        of build artifacts to published artifacts. Supports Ant-style wildcards
+        mapping to target directories. E.g.: */*.zip=>dir (default [])
+    :arg list deployment-exclude-patterns: New line or comma separated patterns
+        for excluding artifacts from deployment to Artifactory (default [])
+    :arg bool env-vars-include: Include all environment variables
+        accessible by the build process. Jenkins-specific env variables
+        are always included. Use env-vars-include-patterns and
+        env-vars-exclude-patterns to filter variables to publish,
+        (default False)
+    :arg list env-vars-include-patterns: Comma or space-separated list of
+        environment variables that will be included as part of the published
+        build info. Environment variables may contain the * and the ? wildcards
+        (default [])
+    :arg list env-vars-exclude-patterns: Comma or space-separated list of
+        environment variables that will be excluded from the published
+        build info (default [])
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/artifactory01.yaml
+
+    .. literalinclude:: /../../tests/publishers/fixtures/artifactory02.yaml
+
+    """
+
+    artifactory = XML.SubElement(
+        xml_parent, 'org.jfrog.hudson.ArtifactoryRedeployPublisher')
+
+    # optional_props
+    artifactory_optional_props(artifactory, data, 'publishers')
+
+    XML.SubElement(artifactory, 'matrixParams').text = ','.join(
+        data.get('matrix-params', []))
+
+    # details
+    details = XML.SubElement(artifactory, 'details')
+    artifactory_common_details(details, data)
+
+    XML.SubElement(details, 'repositoryKey').text = data.get(
+        'release-repo-key', '')
+    XML.SubElement(details, 'snapshotsRepositoryKey').text = data.get(
+        'snapshot-repo-key', '')
+
+    plugin = XML.SubElement(details, 'stagingPlugin')
+    XML.SubElement(plugin, 'pluginName').text = 'None'
+
+    # artifactDeploymentPatterns
+    artifactory_deployment_patterns(artifactory, data)
+
+    # envVarsPatterns
+    artifactory_env_vars_patterns(artifactory, data)
+
+
 def text_finder(parser, xml_parent, data):
     """yaml: text-finder
     This plugin lets you search keywords in the files you specified and
@@ -2461,6 +2686,9 @@ def html_publisher(parser, xml_parent, data):
     :arg str files: Specify the pages to display
     :arg bool keep-all: keep HTML reports for each past build (Default False)
     :arg bool allow-missing: Allow missing HTML reports (Default False)
+    :arg bool link-to-last-build: If this and 'keep-all' both are true, it
+        publishes the link on project level even if build failed.
+        (default false)
 
 
     Example:
@@ -2475,6 +2703,8 @@ def html_publisher(parser, xml_parent, data):
     XML.SubElement(ptarget, 'reportName').text = data['name']
     XML.SubElement(ptarget, 'reportDir').text = data['dir']
     XML.SubElement(ptarget, 'reportFiles').text = data['files']
+    XML.SubElement(ptarget, 'alwaysLinkToLastBuild').text = str(
+        data.get('link-to-last-build', False)).lower()
     keep_all = str(data.get('keep-all', False)).lower()
     XML.SubElement(ptarget, 'keepAll').text = keep_all
     allow_missing = str(data.get('allow-missing', False)).lower()
@@ -3415,6 +3645,20 @@ def github_notifier(parser, xml_parent, data):
                    'com.cloudbees.jenkins.GitHubCommitNotifier')
 
 
+def zulip(parser, xml_parent, data):
+    """yaml: zulip
+    Set build status on zulip.
+    Requires the Jenkins :jenkins-wiki:`Humbug Plugin <Humbug+Plugin>`.
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/zulip.yaml
+       :language: yaml
+    """
+    XML.SubElement(xml_parent,
+                   'hudson.plugins.humbug.HumbugNotifier')
+
+
 def build_publisher(parser, xml_parent, data):
     """yaml: build-publisher
     This plugin allows records from one Jenkins to be published
@@ -3478,13 +3722,16 @@ def stash(parser, xml_parent, data):
     .. literalinclude:: /../../tests/publishers/fixtures/stash001.yaml
        :language: yaml
     """
-
     top = XML.SubElement(xml_parent,
                          'org.jenkinsci.plugins.stashNotifier.StashNotifier')
 
     XML.SubElement(top, 'stashServerBaseUrl').text = data.get('url', '')
-    XML.SubElement(top, 'stashUserName').text = data.get('username', '')
-    XML.SubElement(top, 'stashUserPassword').text = data.get('password', '')
+    XML.SubElement(top, 'stashUserName'
+                   ).text = get_value_from_yaml_or_config_file(
+                       'username', 'stash', data, parser)
+    XML.SubElement(top, 'stashUserPassword'
+                   ).text = get_value_from_yaml_or_config_file(
+                       'password', 'stash', data, parser)
     XML.SubElement(top, 'ignoreUnverifiedSSLPeer').text = str(
         data.get('ignore-ssl', False)).lower()
     XML.SubElement(top, 'commitSha1').text = data.get('commit-sha1', '')
@@ -4393,7 +4640,7 @@ def scoverage(parser, xml_parent, data):
     scoverage = XML.SubElement(
         xml_parent,
         'org.jenkinsci.plugins.scoverage.ScoveragePublisher')
-    XML.SubElement(scoverage, 'reportDirectory').text = str(
+    XML.SubElement(scoverage, 'reportDir').text = str(
         data.get('report-directory', ''))
     XML.SubElement(scoverage, 'reportFile').text = str(
         data.get('report-file', ''))
@@ -4897,6 +5144,263 @@ def flowdock(parser, xml_parent, data):
     gen_setting('Unstable', False)
     gen_setting('Aborted', False)
     gen_setting('NotBuilt', False)
+
+
+def clamav(parser, xml_parent, data):
+    """yaml: clamav
+    Check files with ClamAV, an open source antivirus engine.
+    Requires the Jenkins :jenkins-wiki:`ClamAV Plugin <ClamAV+Plugin>`.
+
+    :arg str includes: Files that should be scanned.
+      (default "")
+    :arg str excludes: Files that should be ignored.
+      (default "")
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/clamav001.yaml
+       :language: yaml
+    """
+    clamav = XML.SubElement(
+        xml_parent,
+        'org.jenkinsci.plugins.clamav.ClamAvRecorder')
+    XML.SubElement(clamav, 'includes').text = str(
+        data.get('includes', ''))
+    XML.SubElement(clamav, 'excludes').text = str(
+        data.get('excludes', ''))
+
+
+def cloudformation(parser, xml_parent, data):
+    """yaml: cloudformation
+    Create cloudformation stacks before running a build and optionally
+    delete them at the end.  Requires the Jenkins :jenkins-wiki:`AWS
+    Cloudformation Plugin <AWS+Cloudformation+Plugin>`.
+
+    :arg list create-stacks: List of stacks to create
+
+        :create-stacks attributes:
+            * **arg str name** - The name of the stack (Required)
+            * **arg str description** - Description of the stack (Optional)
+            * **arg str recipe** - The cloudformation recipe file (Required)
+            * **arg list parameters** - A list of key/value pairs, will be
+              joined together into a comma separated string (Optional)
+            * **arg int timeout** - Number of seconds to wait before giving up
+              creating a stack (default 0)
+            * **arg str access-key** - The Amazon API Access Key (Required)
+            * **arg str secret-key** - The Amazon API Secret Key (Required)
+            * **arg int sleep** - Number of seconds to wait before continuing
+              to the next step (default 0)
+            * **arg array region** - The region to run cloudformation in.
+              (Required)
+
+                :region values:
+                    * **us-east-1**
+                    * **us-west-1**
+                    * **us-west-2**
+                    * **eu-central-1**
+                    * **eu-west-1**
+                    * **ap-southeast-1**
+                    * **ap-southeast-2**
+                    * **ap-northeast-1**
+                    * **sa-east-1**
+    :arg list delete-stacks: List of stacks to delete
+
+        :delete-stacks attributes:
+            * **arg list name** - The names of the stacks to delete (Required)
+            * **arg str access-key** - The Amazon API Access Key (Required)
+            * **arg str secret-key** - The Amazon API Secret Key (Required)
+            * **arg bool prefix** - If selected the tear down process will look
+              for the stack that Starts with the stack name with the oldest
+              creation date and will delete it.  (Default False)
+            * **arg array region** - The region to run cloudformation in.
+              (Required)
+
+                :region values:
+                    * **us-east-1**
+                    * **us-west-1**
+                    * **us-west-2**
+                    * **eu-central-1**
+                    * **eu-west-1**
+                    * **ap-southeast-1**
+                    * **ap-southeast-2**
+                    * **ap-northeast-1**
+                    * **sa-east-1**
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/cloudformation.yaml
+       :language: yaml
+    """
+    region_dict = cloudformation_region_dict()
+    stacks = cloudformation_init(xml_parent, data, 'CloudFormationPostBuild'
+                                 'Notifier')
+    for stack in data.get('create-stacks', []):
+        cloudformation_stack(xml_parent, stack, 'PostBuildStackBean',
+                             stacks, region_dict)
+    delete_stacks = cloudformation_init(xml_parent, data, 'CloudFormation'
+                                                          'Notifier')
+    for delete_stack in data.get('delete-stacks', []):
+        cloudformation_stack(xml_parent, delete_stack, 'SimpleStackBean',
+                             delete_stacks, region_dict)
+
+
+def whitesource(parser, xml_parent, data):
+    """yaml: whitesource
+    This plugin brings automatic open source management to Jenkins users.
+
+    Requires the Jenkins :jenkins-wiki:`Whitesource Plugin
+    <Whitesource+Plugin>`.
+
+    :arg str product-token: Product name or token to update (Default '')
+    :arg str version: Product version (Default '')
+    :arg str override-token: Override the api token from the global config
+        (Default '')
+    :arg str project-token: Token uniquely identifying the project to update
+        (Default '')
+    :arg list includes: list of libraries to include (Default '[]')
+    :arg list excludes: list of libraries to exclude (Default '[]')
+    :arg str policies: Whether to override the global settings.  Valid values:
+        global, enable, disable (Default 'global')
+
+    Example:
+
+    .. literalinclude:: /../../tests/publishers/fixtures/whitesource001.yaml
+       :language: yaml
+    """
+
+    policies = ['global', 'enable', 'disable']
+    policies_value = str(data.get('policies', 'global').lower())
+    if policies_value not in policies:
+        raise InvalidAttributeError('policies', policies_value, policies)
+    whitesource = XML.SubElement(xml_parent, 'org.whitesource.jenkins.'
+                                             'WhiteSourcePublisher')
+    XML.SubElement(whitesource, 'jobCheckPolicies').text = policies_value
+    XML.SubElement(whitesource, 'jobApiToken').text = data.get(
+        'override-token', '')
+    XML.SubElement(whitesource, 'product').text = data.get(
+        'product-token', '')
+    XML.SubElement(whitesource, 'productVersion').text = data.get(
+        'version', '')
+    XML.SubElement(whitesource, 'projectToken').text = data.get(
+        'project-token', '')
+    XML.SubElement(whitesource, 'libIncludes').text = ' '.join(
+        data.get('includes', []))
+    XML.SubElement(whitesource, 'libExcludes').text = ' '.join(
+        data.get('excludes', []))
+    XML.SubElement(whitesource, 'ignorePomModules').text = 'false'
+
+
+def hipchat(parser, xml_parent, data):
+    """yaml: hipchat
+    Publisher that sends hipchat notifications on job events
+    Requires the Jenkins :jenkins-wiki:`Hipchat Plugin
+    <Hipchat+Plugin>` version >=1.9
+
+    Please see documentation for older plugin version
+    http://docs.openstack.org/infra/jenkins-job-builder/hipchat.html
+
+    :arg str token: This will override the default auth token (optional)
+    :arg list rooms: list of HipChat rooms to post messages to, overrides
+        global default (optional)
+    :arg bool notify-start: post messages about build start event
+        (default False)
+    :arg bool notify-success: post messages about successful build event
+        (default False)
+    :arg bool notify-aborted: post messages about aborted build event
+        (default False)
+    :arg bool notify-not-built: post messages about build set to NOT_BUILT.
+        This status code is used in a multi-stage build where a problem in
+        earlier stage prevented later stages from building. (default False)
+    :arg bool notify-unstable: post messages about unstable build event
+        (default False)
+    :arg bool notify-failure:  post messages about build failure event
+        (default False)
+    :arg bool notify-back-to-normal: post messages about build being back to
+        normal after being unstable or failed (default False)
+    :arg str start-message: This will override the default start message
+        (optional)
+    :arg str complete-message: This will override the default complete message
+        (optional)
+
+    Example:
+
+    .. literalinclude::  /../../tests/publishers/fixtures/hipchat001.yaml
+       :language: yaml
+    """
+    hipchat = XML.SubElement(
+        xml_parent,
+        'jenkins.plugins.hipchat.HipChatNotifier')
+    XML.SubElement(hipchat, 'token').text = str(
+        data.get('token', ''))
+
+    if 'rooms' in data:
+        XML.SubElement(hipchat, 'room').text = str(
+            ",".join(data['rooms']))
+
+    XML.SubElement(hipchat, 'startNotification').text = str(
+        data.get('notify-start', False)).lower()
+    XML.SubElement(hipchat, 'notifySuccess').text = str(
+        data.get('notify-success', False)).lower()
+    XML.SubElement(hipchat, 'notifyAborted').text = str(
+        data.get('notify-aborted', False)).lower()
+    XML.SubElement(hipchat, 'notifyNotBuilt').text = str(
+        data.get('notify-not-built', False)).lower()
+    XML.SubElement(hipchat, 'notifyUnstable').text = str(
+        data.get('notify-unstable', False)).lower()
+    XML.SubElement(hipchat, 'notifyFailure').text = str(
+        data.get('notify-failure', False)).lower()
+    XML.SubElement(hipchat, 'notifyBackToNormal').text = str(
+        data.get('notify-back-to-normal', False)).lower()
+
+    # optional settings, so only add XML in if set.
+    if 'start-message' in data:
+        XML.SubElement(hipchat, 'startJobMessage').text = str(
+            data['start-message'])
+    if 'complete-message' in data:
+        XML.SubElement(hipchat, 'completeJobMessage').text = str(
+            data['complete-message'])
+
+
+def phabricator(parser, xml_parent, data):
+    """yaml: phabricator
+    Integrate with `Phabricator <http://phabricator.org/>`_
+
+    Requires the Jenkins :jenkins-wiki:`Phabricator Plugin
+    <Phabricator+Plugin>`.
+
+    :arg bool comment-on-success: Post a *comment* when the build
+      succeeds. (optional)
+    :arg bool uberalls-enabled: Integrate with uberalls. (optional)
+    :arg str comment-file: Include contents of given file if
+      commenting is enabled. (optional)
+    :arg int comment-size: Maximum comment character length. (optional)
+    :arg bool comment-with-console-link-on-failure: Post a *comment*
+      when the build fails. (optional)
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/publishers/fixtures/phabricator001.yaml
+       :language: yaml
+    """
+
+    root = XML.SubElement(xml_parent,
+                          'com.uber.jenkins.phabricator.PhabricatorNotifier')
+
+    if 'comment-on-success' in data:
+        XML.SubElement(root, 'commentOnSuccess').text = str(
+            data.get('comment-on-success')).lower()
+    if 'uberalls-enabled' in data:
+        XML.SubElement(root, 'uberallsEnabled').text = str(
+            data.get('uberalls-enabled')).lower()
+    if 'comment-file' in data:
+        XML.SubElement(root, 'commentFile').text = data.get('comment-file')
+    if 'comment-size' in data:
+        XML.SubElement(root, 'commentSize').text = str(
+            data.get('comment-size'))
+    if 'comment-with-console-link-on-failure' in data:
+        XML.SubElement(root, 'commentWithConsoleLinkOnFailure').text = str(
+            data.get('comment-with-console-link-on-failure')).lower()
 
 
 class Publishers(jenkins_jobs.modules.base.Base):

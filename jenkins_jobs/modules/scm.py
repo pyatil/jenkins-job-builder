@@ -40,7 +40,8 @@ import logging
 import xml.etree.ElementTree as XML
 import jenkins_jobs.modules.base
 from jenkins_jobs.errors import (InvalidAttributeError,
-                                 JenkinsJobsException)
+                                 JenkinsJobsException,
+                                 MissingAttributeError)
 
 
 def git(parser, xml_parent, data):
@@ -50,23 +51,25 @@ def git(parser, xml_parent, data):
 
     :arg str url: URL of the git repository
     :arg str credentials-id: ID of credential to use to connect, which is the
-      last field(a 32-digit hexadecimal code) of the path of URL visible after
-      you clicked the credential under Jenkins Global credentials. (optional)
-    :arg str refspec: refspec to fetch (default '+refs/heads/\*:refs/remotes/\
-remoteName/\*')
+        last field (a 32-digit hexadecimal code) of the path of URL visible
+        after you clicked the credential under Jenkins Global credentials.
+        (optional)
+    :arg str refspec: refspec to fetch (default
+        '+refs/heads/\*:refs/remotes/remoteName/\*')
     :arg str name: name to fetch (default 'origin')
     :arg list(str) remotes: list of remotes to set up (optional, only needed if
-      multiple remotes need to be set up)
+        multiple remotes need to be set up)
 
-        :Remote: * **url** (`string`) - url of remote repo
-                 * **refspec** (`string`) - refspec to fetch (optional)
-                 * **credentials-id** - ID of credential to use to connect,
-                   which is the last field of the path of URL
-                   (a 32-digit hexadecimal code) visible after you clicked
-                   credential under Jenkins Global credentials. (optional)
+        :Remote:
+            * **url** (`string`) - url of remote repo
+            * **refspec** (`string`) - refspec to fetch (optional)
+            * **credentials-id** - ID of credential to use to connect, which
+              is the last field of the path of URL (a 32-digit hexadecimal
+              code) visible after you clicked credential under Jenkins Global
+              credentials. (optional)
     :arg list(str) branches: list of branch specifiers to build (default '**')
     :arg list(str) excluded-users: list of users to ignore revisions from
-      when polling for changes. (if polling is enabled, optional)
+        when polling for changes. (if polling is enabled, optional)
     :arg list(str) included-regions: list of file/folders to include (optional)
     :arg list(str) excluded-regions: list of file/folders to exclude (optional)
     :arg str local-branch: Checkout/merge to local branch (optional)
@@ -81,7 +84,7 @@ remoteName/\*')
             * **fast-forward-mode** (`string`) - merge fast-forward mode.
               Can be one of 'FF', 'FF_ONLY' or 'NO_FF'. (default 'FF')
     :arg str basedir: location relative to the workspace root to clone to
-             (default: workspace)
+        (default workspace)
     :arg bool skip-tag: Skip tagging (default false)
     :arg bool shallow-clone: Perform shallow clone (default false)
     :arg bool prune: Prune remote branches (default false)
@@ -100,98 +103,86 @@ remoteName/\*')
         .. deprecated:: 1.1.1. Please use submodule extension.
 
     :arg bool use-author: Use author rather than committer in Jenkin's build
-      changeset (default false)
+        changeset (default false)
     :arg str git-tool: The name of the Git installation to use (default
-      'Default')
+        'Default')
     :arg str reference-repo: Path of the reference repo to use during clone
-      (optional)
+        (optional)
     :arg str scm-name: The unique scm name for this Git SCM (optional)
     :arg bool ignore-notify: Ignore notifyCommit URL accesses (default false)
-    :arg str browser: what repository browser to use (default '(Auto)')
+    :arg str browser: what repository browser to use.
+
+        :browsers supported:
+            * **auto** - (default)
+            * **assemblaweb** - https://www.assembla.com/
+            * **bitbucketweb** - https://www.bitbucket.org/
+            * **cgit** - http://git.zx2c4.com/cgit/about/
+            * **fisheye** - https://www.atlassian.com/software/fisheye
+            * **gitblit** - http://gitblit.com/
+            * **githubweb** - https://github.com/
+            * **gitiles** - https://code.google.com/p/gitiles/
+            * **gitlab** - https://about.gitlab.com/
+            * **gitlist** - http://gitlist.org/
+            * **gitoriousweb** - https://gitorious.org/
+            * **gitweb** - http://git-scm.com/docs/gitweb
+            * **kiln** - https://www.fogcreek.com/kiln/
+            * **microsoft\-tfs\-2013** - |tfs_2013|
+            * **phabricator** - http://phabricator.org/
+            * **redmineweb** - http://www.redmine.org/
+            * **rhodecode** - https://rhodecode.com/
+            * **stash** - https://www.atlassian.com/software/stash
+            * **viewgit** - http://viewgit.fealdia.org/
     :arg str browser-url: url for the repository browser (required if browser
-      is not '(Auto)', no default)
+        is not 'auto', no default)
     :arg str browser-version: version of the repository browser (GitLab only,
-      default '0.0')
+        default '0.0')
     :arg str project-name: project name in Gitblit and ViewGit repobrowser
-      (optional)
+        (optional)
     :arg str repo-name: repository name in phabricator repobrowser (optional)
-    :arg str choosing-strategy: Jenkins class for selecting what to build
-      (default 'default')
+    :arg str choosing-strategy: Jenkins class for selecting what to build.
+        Can be one of `default`, `inverse`, or `gerrit` (default 'default')
     :arg str git-config-name: Configure name for Git clone (optional)
     :arg str git-config-email: Configure email for Git clone (optional)
 
-
     :extensions:
-        :arg dict changelog-against:
-            :changelog-against:
-                * **remote** (`string`) - name of repo that contains branch to
-                  create changelog against (default 'origin')
-                * **branch** (`string`) - name of the branch to create
-                  changelog against (default 'master')
 
-        :arg dict clean:
-            :clean:
-                * **after** (`bool`) - Clean the workspace after checkout
-                * **before** (`bool`) - Clean the workspace before checkout
+        * **changelog-against** (`dict`)
+            * **remote** (`string`) - name of repo that contains branch to
+              create changelog against (default 'origin')
+            * **branch** (`string`) - name of the branch to create changelog
+              against (default 'master')
+        * **clean** (`dict`)
+            * **after** (`bool`) - Clean the workspace after checkout
+            * **before** (`bool`) - Clean the workspace before checkout
+        * **ignore-commits-with-messages** (`list(str)`) - Revisions committed
+          with messages matching these patterns will be ignored. (optional)
+        * **force-polling-using-workspace** (`bool`) - Force polling using
+          workspace (default false)
+        * **sparse-checkout** (`dict`)
+            * **paths** (`list`) - List of paths to sparse checkout. (optional)
+        * **submodule** (`dict`)
+            * **disable** (`bool`) - By disabling support for submodules you
+              can still keep using basic git plugin functionality and just have
+              Jenkins to ignore submodules completely as if they didn't exist.
+            * **recursive** (`bool`) - Retrieve all submodules recursively
+              (uses '--recursive' option which requires git>=1.6.5)
+            * **tracking** (`bool`) - Retrieve the tip of the configured
+              branch in .gitmodules (Uses '\-\-remote' option which requires
+              git>=1.8.2)
+            * **timeout** (`int`) - Specify a timeout (in minutes) for
+              submodules operations (default: 10).
+        * **timeout** (`str`) - Timeout for git commands in minutes (optional)
+        * **wipe-workspace** (`bool`) - Wipe out workspace before build
+            (default true)
 
-        :arg list(str) ignore-commits-with-messages: Revisions committed with
-            messages matching these patterns will be ignored. (optional)
-
-        :arg bool force-polling-using-workspace: Force polling using workspace
-            (default false)
-
-        :arg dict sparse-checkout:
-            :sparse-checkout:
-                * **paths** (`list`) - List of paths to sparse checkout.
-                  (optional)
-
-        :arg dict submodule:
-            :submodule:
-                * **disable** (`bool`) - By disabling support for submodules
-                  you can still keep using basic git plugin functionality
-                  and just have Jenkins to ignore submodules completely as
-                  if they didn't exist.
-                * **recursive** (`bool`) - Retrieve all submodules recursively
-                  (uses '--recursive' option which requires git>=1.6.5)
-                * **tracking** (`bool`) - Retrieve the tip of the configured
-                  branch in .gitmodules (Uses '--remote' option which
-                  requires git>=1.8.2)
-                * **timeout** (`int`) - Specify a timeout (in minutes) for
-                  submodules operations (default: 10).
-
-        :arg str timeout: Timeout for git commands in minutes (optional)
-        :arg bool wipe-workspace: Wipe out workspace before build
-          (default true)
-
-    :browser values:
-        :auto:
-        :assemblaweb:
-        :bitbucketweb:
-        :cgit:
-        :fisheye:
-        :gitblit:
-        :githubweb:
-        :gitiles:
-        :gitlab:
-        :gitlist:
-        :gitoriousweb:
-        :gitweb:
-        :kiln:
-        :microsoft-tfs-2013:
-        :phabricator:
-        :redmineweb:
-        :rhodecode:
-        :stash:
-        :viewgit:
-
-    :choosing-strategy values:
-        :default:
-        :inverse:
-        :gerrit:
 
     Example:
 
     .. literalinclude:: /../../tests/scm/fixtures/git001.yaml
+
+    .. |tfs_2013| replace::
+        https://www.visualstudio.com/en-us/products/tfs-overview-vs.aspx
+
     """
     logger = logging.getLogger("%s:git" % __name__)
 
@@ -257,12 +248,6 @@ remoteName/\*')
         XML.SubElement(bspec, 'name').text = branch
     excluded_users = '\n'.join(data.get('excluded-users', []))
     XML.SubElement(scm, 'excludedUsers').text = excluded_users
-    if 'included-regions' in data:
-        include_string = '\n'.join(data['included-regions'])
-        XML.SubElement(scm, 'includedRegions').text = include_string
-    if 'excluded-regions' in data:
-        exclude_string = '\n'.join(data['excluded-regions'])
-        XML.SubElement(scm, 'excludedRegions').text = exclude_string
     if 'merge' in data:
         merge = data['merge']
         merge_strategies = ['default', 'resolve', 'recursive', 'octopus',
@@ -322,6 +307,16 @@ remoteName/\*')
 
     exts_node = XML.SubElement(scm, 'extensions')
     impl_prefix = 'hudson.plugins.git.extensions.impl.'
+    if 'included-regions' in data or 'excluded-regions' in data:
+        ext_name = XML.SubElement(exts_node,
+                                  'hudson.plugins.git.extensions.impl.'
+                                  'PathRestriction')
+        if 'included-regions' in data:
+            include_string = '\n'.join(data['included-regions'])
+            XML.SubElement(ext_name, 'includedRegions').text = include_string
+        if 'excluded-regions' in data:
+            exclude_string = '\n'.join(data['excluded-regions'])
+            XML.SubElement(ext_name, 'excludedRegions').text = exclude_string
     if 'changelog-against' in data:
         ext_name = impl_prefix + 'ChangelogToBranch'
         ext = XML.SubElement(exts_node, ext_name)
@@ -429,6 +424,136 @@ remoteName/\*')
                 data.get('repo-name', ''))
 
 
+def cvs(parser, xml_parent, data):
+    """yaml: cvs
+    Specifies the CVS SCM repository for this job.
+    Requires the Jenkins :jenkins-wiki:`CVS Plugin <CVS+Plugin>`.
+
+    :arg list repos: List of CVS repositories. (required)
+
+        :Repos:
+            * **root** (`str`) -- The CVS connection string Jenkins uses to
+              connect to the server. The format is :protocol:user@host:path
+              (required)
+            * **locations** (`list`) -- List of locations. (required)
+
+                :Locations:
+                    * **type** (`str`) -- Type of location.
+
+                        :supported values:
+                            * **HEAD** - (default)
+                            * **BRANCH**
+                            * **TAG**
+                    * **name** (`str`) -- Name of location. Only valid in case
+                      of 'BRANCH' or 'TAG' location type. (default '')
+                    * **use-head** (`bool`) -- Use Head if not found. Only
+                      valid in case of 'BRANCH' or 'TAG' location type.
+                      (default false)
+                    * **modules** (`list`) -- List of modules. (required)
+
+                        :Modules:
+                            * **remote** -- The name of the module in the
+                              repository at CVSROOT. (required)
+                            * **local-name** --  The name to be applied to
+                              this module in the local workspace. If blank,
+                              the remote module name will be used.
+                              (default '')
+            * **excluded-regions** (`list str`) -- Patterns for excluding
+              regions. (optional)
+            * **compression-level** (`int`) -- Compression level. Must be a
+              number between -1 and 9 inclusive. Choose -1 for System Default.
+              (default -1)
+    :arg bool use-update: If true, Jenkins will use 'cvs update' whenever
+      possible for builds. This makes a build faster. But this also causes the
+      artifacts from the previous build to remain in the file system when a
+      new build starts, making it not a true clean build. (default true)
+    :arg bool prune-empty: Remove empty directories after checkout using the
+      CVS '-P' option. (default true)
+    :arg bool skip-changelog: Prevent the changelog being generated after
+      checkout has completed. (default false)
+    :arg bool show-all-output: Instructs CVS to show all logging output. CVS
+      normally runs in quiet mode but this option disables that.
+      (default false)
+    :arg bool clean-checkout: Perform clean checkout on failed update.
+      (default false)
+    :arg bool clean-copy: Force clean copy for locally modified files.
+      (default false)
+
+    Example
+
+    .. literalinclude:: /../../tests/scm/fixtures/cvs001.yaml
+       :language: yaml
+    .. literalinclude:: /../../tests/scm/fixtures/cvs002.yaml
+       :language: yaml
+    """
+    prefix = 'hudson.scm.'
+    valid_loc_types = {'HEAD': 'Head', 'TAG': 'Tag', 'BRANCH': 'Branch'}
+    cvs = XML.SubElement(xml_parent, 'scm', {'class': prefix + 'CVSSCM'})
+    repos = data.get('repos')
+    if not repos:
+        raise JenkinsJobsException("'repos' empty or missing")
+    repos_tag = XML.SubElement(cvs, 'repositories')
+    for repo in repos:
+        repo_tag = XML.SubElement(repos_tag, prefix + 'CvsRepository')
+        try:
+            XML.SubElement(repo_tag, 'cvsRoot').text = repo['root']
+        except KeyError:
+            raise MissingAttributeError('root')
+        items_tag = XML.SubElement(repo_tag, 'repositoryItems')
+        locations = repo.get('locations')
+        if not locations:
+            raise JenkinsJobsException("'locations' empty or missing")
+        for location in locations:
+            item_tag = XML.SubElement(items_tag, prefix + 'CvsRepositoryItem')
+            loc_type = location.get('type', 'HEAD')
+            if loc_type not in valid_loc_types:
+                raise InvalidAttributeError('type', loc_type, valid_loc_types)
+            loc_class = ('{0}CvsRepositoryLocation${1}Repository'
+                         'Location').format(prefix, valid_loc_types[loc_type])
+            loc_tag = XML.SubElement(item_tag, 'location',
+                                     {'class': loc_class})
+            XML.SubElement(loc_tag, 'locationType').text = loc_type
+            if loc_type == 'TAG' or loc_type == 'BRANCH':
+                XML.SubElement(loc_tag, 'locationName').text = location.get(
+                    'name', '')
+                XML.SubElement(loc_tag, 'useHeadIfNotFound').text = str(
+                    location.get('use-head', False)).lower()
+            modules = location.get('modules')
+            if not modules:
+                raise JenkinsJobsException("'modules' empty or missing")
+            modules_tag = XML.SubElement(item_tag, 'modules')
+            for module in modules:
+                module_tag = XML.SubElement(modules_tag, prefix + 'CvsModule')
+                try:
+                    XML.SubElement(module_tag, 'remoteName'
+                                   ).text = module['remote']
+                except KeyError:
+                    raise MissingAttributeError('remote')
+                XML.SubElement(module_tag, 'localName').text = module.get(
+                    'local-name', '')
+        excluded = repo.get('excluded-regions', [])
+        excluded_tag = XML.SubElement(repo_tag, 'excludedRegions')
+        for pattern in excluded:
+            pattern_tag = XML.SubElement(excluded_tag,
+                                         prefix + 'ExcludedRegion')
+            XML.SubElement(pattern_tag, 'pattern').text = pattern
+        compression_level = repo.get('compression-level', '-1')
+        if int(compression_level) not in range(-1, 10):
+            raise InvalidAttributeError('compression-level',
+                                        compression_level, range(-1, 10))
+        XML.SubElement(repo_tag, 'compressionLevel').text = compression_level
+    mapping = [('use-update', 'canUseUpdate', True),
+               ('prune-empty', 'pruneEmptyDirectories', True),
+               ('skip-changelog', 'skipChangeLog', False),
+               ('show-all-output', 'disableCvsQuiet', False),
+               ('clean-checkout', 'cleanOnFailedUpdate', False),
+               ('clean-copy', 'forceCleanCopy', False)]
+    for elem in mapping:
+        opt, xml_tag, val = elem[:]
+        XML.SubElement(cvs, xml_tag).text = str(
+            data.get(opt, val)).lower()
+
+
 def repo(parser, xml_parent, data):
     """yaml: repo
     Specifies the repo SCM repository for this job.
@@ -437,21 +562,21 @@ def repo(parser, xml_parent, data):
     :arg str manifest-url: URL of the repo manifest
     :arg str manifest-branch: The branch of the manifest to use (optional)
     :arg str manifest-file: Initial manifest file to use when initialising
-             (optional)
+        (optional)
     :arg str manifest-group: Only retrieve those projects in the manifest
-             tagged with the provided group name (optional)
+        tagged with the provided group name (optional)
     :arg str destination-dir: Location relative to the workspace root to clone
-             under (optional)
+        under (optional)
     :arg str repo-url: custom url to retrieve the repo application (optional)
     :arg str mirror-dir: Path to mirror directory to reference when
-             initialising (optional)
+        initialising (optional)
     :arg int jobs: Number of projects to fetch simultaneously (default 0)
     :arg bool current-branch: Fetch only the current branch from the server
-              (default true)
+        (default true)
     :arg bool quiet: Make repo more quiet
-              (default true)
+        (default true)
     :arg str local-manifest: Contents of .repo/local_manifest.xml, written
-             prior to calling sync (optional)
+        prior to calling sync (optional)
 
     Example:
 
@@ -503,11 +628,11 @@ def store(parser, xml_parent, data):
     :arg str script: name of the Store script to run
     :arg str repository: name of the Store repository
     :arg str version-regex: regular expression that specifies which pundle
-             versions should be considered (optional)
+        versions should be considered (optional)
     :arg str minimum-blessing: minimum blessing level to consider (optional)
     :arg str parcel-builder-file: name of the file to generate as input to
-             a later parcel building step (optional - if not specified, then
-             no parcel builder file will be generated)
+        a later parcel building step (optional - if not specified, then no
+        parcel builder file will be generated)
     :arg list pundles:
 
         :(package or bundle): (`dict`): A package or bundle to check
@@ -562,44 +687,46 @@ def svn(parser, xml_parent, data):
 
     :arg str url: URL of the svn repository
     :arg str basedir: location relative to the workspace root to checkout to
-      (default '.')
+        (default '.')
     :arg str credentials-id: optional argument to specify the ID of credentials
-      to use
+        to use
     :arg str repo-depth: Repository depth. Can be one of 'infinity', 'empty',
-      'files', 'immediates' or 'unknown'. (default 'infinity')
+        'files', 'immediates' or 'unknown'. (default 'infinity')
     :arg bool ignore-externals: Ignore Externals. (default false)
     :arg str workspaceupdater: optional argument to specify
-      how to update the workspace (default wipeworkspace)
+    :arg str workspaceupdater: optional argument to specify how to update the
+        workspace (default wipeworkspace)
+
+        :supported values:
+             * **wipeworkspace** - deletes the workspace before checking out
+             * **revertupdate** - do an svn revert then an svn update
+             * **emulateclean** - delete unversioned/ignored files then update
+             * **update** - do an svn update as much as possible
+
     :arg list(str) excluded-users: list of users to ignore revisions from
-      when polling for changes (if polling is enabled; parameter is optional)
+        when polling for changes (if polling is enabled; parameter is optional)
     :arg list(str) included-regions: list of file/folders to include
-      (optional)
+        (optional)
     :arg list(str) excluded-regions: list of file/folders to exclude (optional)
     :arg list(str) excluded-commit-messages: list of commit messages to exclude
-      (optional)
+        (optional)
     :arg str exclusion-revprop-name: revision svn-property to ignore (optional)
     :arg bool ignore-property-changes-on-directories: ignore svn-property only
-      changes of directories (default false)
+        changes of directories (default false)
     :arg bool filter-changelog: If set Jenkins will apply the same inclusion
-      and exclusion patterns for displaying changelog entries as it does for
-      polling for changes (default false)
+        and exclusion patterns for displaying changelog entries as it does for
+        polling for changes (default false)
     :arg list repos: list of repositories to checkout (optional)
     :arg str viewvc-url: URL of the svn web interface (optional)
 
-      :Repo: * **url** (`str`) -- URL for the repository
-             * **basedir** (`str`) -- Location relative to the workspace
-               root to checkout to (default '.')
-             * **credentials-id** - optional ID of credentials to use
-             * **repo-depth** - Repository depth. Can be one of 'infinity',
-               'empty', 'files', 'immediates' or 'unknown'.
-               (default 'infinity')
-             * **ignore-externals** - Ignore Externals. (default false)
-
-    :workspaceupdater values:
-             :wipeworkspace: - deletes the workspace before checking out
-             :revertupdate:  - do an svn revert then an svn update
-             :emulateclean:  - delete unversioned/ignored files then update
-             :update:        - do an svn update as much as possible
+        :Repo:
+            * **url** (`str`) -- URL for the repository
+            * **basedir** (`str`) -- Location relative to the workspace root
+              to checkout to (default '.')
+            * **credentials-id** - optional ID of credentials to use
+            * **repo-depth** - Repository depth. Can be one of 'infinity',
+              'empty', 'files', 'immediates' or 'unknown'. (default 'infinity')
+            * **ignore-externals** - Ignore Externals. (default false)
 
     Multiple repos example:
 
@@ -739,37 +866,11 @@ def tfs(parser, xml_parent, data):
               uses server-url)
 
 
-    Examples::
+    Examples:
 
-      scm:
-        - tfs:
-           server-url: "tfs.company.com"
-           project-path: "$/myproject"
-           login: "mydomain\\\jane"
-           use-update: false
-           local-path: "../foo/"
-           workspace: "Hudson-${JOB_NAME}"
-           web-access:
-               - web-url: "http://TFSMachine:8080"
+    .. literalinclude:: /../../tests/scm/fixtures/tfs-001.yaml
 
-      scm:
-        - tfs:
-           server-url: "tfs.company.com"
-           project-path: "$/myproject"
-           login: "jane@mydomain"
-           use-update: false
-           local-path: "../foo/"
-           workspace: "Hudson-${JOB_NAME}"
-           web-access:
-
-      scm:
-        - tfs:
-           server-url: "tfs.company.com"
-           project-path: "$/myproject"
-           login: "mydomain\\\jane"
-           use-update: false
-           local-path: "../foo/"
-           workspace: "Hudson-${JOB_NAME}"
+    .. literalinclude:: /../../tests/scm/fixtures/tfs-002.yaml
 
     """
 
@@ -852,28 +953,31 @@ def hg(self, xml_parent, data):
     :arg str credentials-id: ID of credentials to use to connect (optional)
     :arg str revision-type: revision type to use (default 'branch')
     :arg str revision: the branch or tag name you would like to track
-      (default 'default')
+        (default 'default')
     :arg list(str) modules: reduce unnecessary builds by specifying a list of
-      "modules" within the repository. A module is a directory name within the
-      repository that this project lives in. (default '')
+        "modules" within the repository. A module is a directory name within
+        the repository that this project lives in. (default '')
     :arg bool clean: wipe any local modifications or untracked files in the
-      repository checkout (default false)
+        repository checkout (default false)
     :arg str subdir: check out the Mercurial repository into this
-      subdirectory of the job's workspace (optional)
+        subdirectory of the job's workspace (optional)
     :arg bool disable-changelog: do not calculate the Mercurial changelog
-      for each build (default false)
-    :arg str browser: what repository browser to use (default 'auto')
-    :arg str browser-url: url for the repository browser
-      (required if browser is set)
+        for each build (default false)
+    :arg str browser: what repository browser to use
 
-    :browser values:
-        :fisheye:
-        :bitbucketweb:
-        :googlecode:
-        :hgweb:
-        :kilnhg:
-        :rhodecode:
-        :rhodecodelegacy:
+        :browsers supported:
+            * **auto** - (default)
+            * **bitbucketweb** - https://www.bitbucket.org/
+            * **fisheye** - https://www.atlassian.com/software/fisheye
+            * **googlecode** - https://code.google.com/
+            * **hgweb** - https://www.selenic.com/hg/help/hgweb
+            * **kilnhg** - https://www.fogcreek.com/kiln/
+            * **rhodecode** - https://rhodecode.com/ (versions >= 1.2)
+            * **rhodecode-pre-1.2.0** - https://rhodecode.com/ (versions < 1.2)
+
+    :arg str browser-url: url for the repository browser
+        (required if browser is set)
+
 
     Example:
 
