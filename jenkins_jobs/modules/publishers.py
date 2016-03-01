@@ -119,7 +119,7 @@ def allure(parser, xml_parent, data):
     reportVersionPolicy = XML.SubElement(config, 'reportVersionPolicy')
     reportVersionPolicy.text = "CUSTOM"
     reportVersionCustom = XML.SubElement(config, 'reportVersionCustom')
-    reportVersionCustom.text = "1.4.3"
+    reportVersionCustom.text = data.get("version", "1.4.9")
     includeProperties = XML.SubElement(config, 'includeProperties')
     includeProperties.text = "false"
     REPORT__DIR__PREFIX = XML.SubElement(allure, 'REPORT__DIR__PREFIX')
