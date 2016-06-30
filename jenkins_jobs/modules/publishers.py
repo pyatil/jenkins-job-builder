@@ -120,6 +120,14 @@ def allure(parser, xml_parent, data):
     reportVersionPolicy.text = "CUSTOM"
     reportVersionCustom = XML.SubElement(config, 'reportVersionCustom')
     reportVersionCustom.text = data.get("version", "1.4.9")
+    issuePattern = data.get("issue_tracker", None)
+    if issuePattern:
+        properties = XML.SubElement(config, "properties")
+        propertyConfig = XML.SubElement(properties, "ru.yandex.qatools.allure.jenkins.config.PropertyConfig")
+        propertyName1 = XML.SubElement(propertyConfig, "key")
+        propertyName1.text = "allure.issues.tracker.pattern"
+        propertyValue1 = XML.SubElement(propertyConfig, "value")
+        propertyValue1.text = issuePattern
     includeProperties = XML.SubElement(config, 'includeProperties')
     includeProperties.text = "false"
     REPORT__DIR__PREFIX = XML.SubElement(allure, 'REPORT__DIR__PREFIX')
