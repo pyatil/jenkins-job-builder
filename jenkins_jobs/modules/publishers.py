@@ -112,7 +112,7 @@ def allure(parser, xml_parent, data):
     allure.set("plugin", "allure-jenkins-plugin@2.5")
     config = XML.SubElement(allure, 'config')
     resultsPattern = XML.SubElement(config, 'resultsPattern')
-    resultsPattern.text = "allure-results"
+    resultsPattern.text = data.get("results", "allure-results")
     reportVersionCustom = XML.SubElement(config, 'reportVersionCustom')
     reportBuildPolicy = XML.SubElement(config, 'reportBuildPolicy')
     reportBuildPolicy.text = "ALWAYS"
